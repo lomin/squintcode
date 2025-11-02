@@ -1,0 +1,54 @@
+# ClojureScript/Clojure build artifacts
+pom.xml
+pom.xml.asc
+*.jar
+*.class
+/lib/
+/classes/
+/target/
+/checkouts/
+.cpcache/
+.shadow-cljs/
+.cljs_node_repl/
+
+# Build output
+/out/
+
+# Leiningen
+.lein-deps-sum
+.lein-repl-history
+.lein-plugins/
+.lein-failures
+
+# REPL
+.nrepl-port
+.nrepl-history
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.idea/
+*.iml
+.vscode/
+.calva/
+.portal/
+.lsp/
+.clj-kondo/.cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Local Claude Code settings
+.claude/settings.local.json
+.mcp.json

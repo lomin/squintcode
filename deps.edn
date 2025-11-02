@@ -1,0 +1,18 @@
+{:paths ["src" "test"]
+
+ :deps {org.clojure/clojurescript {:mvn/version "1.11.132"}}
+
+ :aliases
+ {;; Start a ClojureScript REPL (for Calva and interactive development)
+  :repl
+  {:main-opts ["-m" "cljs.main" "--repl"]}
+
+  ;; Run tests once (using cljs-test-runner - canonical way)
+  :test
+  {:extra-deps {olical/cljs-test-runner {:mvn/version "3.8.1"}}
+   :main-opts ["-m" "cljs-test-runner.main"]}
+
+  ;; Continuous test runner (watches for changes and runs tests)
+  :test-watch
+  {:extra-deps {olical/cljs-test-runner {:mvn/version "3.8.1"}}
+   :main-opts ["-m" "cljs-test-runner.main" "-w" "src"]}}}
