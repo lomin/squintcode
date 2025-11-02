@@ -1,5 +1,5 @@
 (ns squintcode.fizzbuzz-test
-  (:require [cljs.test :refer-macros [deftest is testing]]
+  (:require [cljs.test :refer-macros [deftest is testing] :refer [run-tests]]
             [squintcode.fizzbuzz :refer [fizzBuzz]]))
 
 (deftest fizzbuzz-basic-test
@@ -24,3 +24,5 @@
     (let [result (fizzBuzz 5)]
       (is (= 5 (count result)))
       (is (= "Buzz" (last result))))))
+
+(comment  (run-tests 'squintcode.fizzbuzz-test))

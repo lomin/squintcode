@@ -1,0 +1,1 @@
+{:hooks {:analyze-call {squintcode.macros/aloop hooks.aloop/aloop}}}

@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "./build-squintcode.sh"
+    "build": "./build-all.sh",
+    "build:all": "./build-all.sh",
+    "build:one": "./build-one.sh",
+    "clean": "./clean.sh"
   },
   "keywords": [],
   "author": "",

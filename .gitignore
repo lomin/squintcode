@@ -10,6 +10,7 @@ pom.xml.asc
 .cpcache/
 .shadow-cljs/
 .cljs_node_repl/
+cljs-test-runner-out/
 
 # Build output
 /out/
