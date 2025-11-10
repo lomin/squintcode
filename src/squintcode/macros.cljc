@@ -14,11 +14,10 @@
 (defmacro dict
   "Create a mutable map efficiently.
    - CLJ  : returns a java.util.HashMap with k/vs inserted via .put
-   - CLJS : returns a JS Map with k/vs inserted via .set (keywords converted to strings at compile time)
-   - Squint: returns a JS Map with k/vs inserted via .set (keywords converted to strings at compile time)"
+   - CLJS: returns a JS Map with k/vs inserted via .set (keywords converted to strings at compile time)"
   [& kvs]
   (when (odd? (count kvs))
-    (throw (ex-info "new-map requires an even number of arguments (k v ...)"
+    (throw (ex-info "dict requires an even number of arguments (k v ...)"
                     {:args kvs})))
   (let [pairs (partition 2 kvs)]
     (if (:ns &env)                                ;; CLJS/Squint expansion
@@ -56,9 +55,11 @@
      `(let [v# (.get ^java.util.Map ~ht ~key)]
         (if (nil? v#) ~default v#)))))
 
-;; postwalk: depth-first post-order traversal
-;; Visits children first, then applies f to the parent
-(defn postwalk [f form]
+(defn postwalk
+  "Depth-first post-order traversal.
+   Visits children first, then applies f to the parent.
+   Recursively walks sequences and vectors, applying f to each node after walking its children."
+  [f form]
   (let [walked (cond
                  (seq? form)
                  (map #(postwalk f %) form)
@@ -90,9 +91,15 @@
       ;; Clojure: create empty array of given size
       `(clojure.core/make-array java.lang.Object ~size))))
 
-;; forv macro that returns a vector
-;; Optimized for range expressions: pre-allocates array and uses dotimes
-(defmacro forv [[binding range-expr] body]
+(defmacro forv
+  "Optimized array comprehension for range expressions.
+   Pre-allocates an array and uses dotimes for efficient iteration.
+
+   Usage:
+   (forv [i (range 0 5)] (* i 2))  ; returns array [0 2 4 6 8]
+
+   Note: Returns an array (not a vector) for performance."
+  [[binding range-expr] body]
   (let [[_ start end] range-expr]  ; destructure (range start end), ignore 'range symbol
     `(let [start# ~start
            end# ~end
@@ -115,10 +122,23 @@
   (setf (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2) "hello")
   (push-end (make-array 5 :initial-contents [1 2 3 4 5]) 2))
 
-;; aloop macro for optimized array iteration with O(1) access
-;; Usage: (aloop arr elem [state-var1 init1 ...] body)
-;; In body, use (recur ...) which implicitly increments the index
-(defmacro aloop [arr-expr elem-var state-bindings & body]
+(defmacro aloop
+  "Optimized array iteration with O(1) access and implicit index management.
+
+   Usage:
+   (aloop arr elem [state-var1 init1 ...] body)
+
+   The macro provides:
+   - elem-var: bound to current array element (or nil when past end)
+   - state-bindings: additional loop state variables
+   - (recur ...): implicitly increments the index
+
+   Example:
+   (aloop (make-array 3 :initial-contents [1 2 3]) x [sum 0]
+     (if x
+       (recur (+ sum x))
+       sum))  ; returns 6"
+  [arr-expr elem-var state-bindings & body]
   (let [idx (gensym "idx")
         replace-recur (fn [form]
                         (if (and (seq? form) (= 'recur (first form)))
@@ -155,7 +175,10 @@
 
 
 ;; Test framework macros for Squint
-(defmacro deftest [name & body]
+(defmacro deftest
+  "Define a test case for Squint.
+   Wraps the body in a try-catch block and prints test results."
+  [name & body]
   `(do
      (~'js* "// ~{}\n" ~name)
      (println (str "\n" ~(str name) ":"))
@@ -165,12 +188,22 @@
          (println (str "  ✗ Error: " (.-message e#)))
          (~'js/process.exit 1)))))
 
-(defmacro testing [description & body]
+(defmacro testing
+  "Group related assertions with a descriptive label.
+   Prints the description and executes the body."
+  [description & body]
   `(do
      (println (str "  " ~description))
      ~@body))
 
 (defmacro is
+  "Assert that a form evaluates to true.
+   Special handling for equality assertions (= expected actual).
+
+   Usage:
+   (is (= 5 (+ 2 3)))           ; equality assertion
+   (is (> x 0))                 ; boolean assertion
+   (is (= 5 result) \"custom message\")  ; with custom message"
   ([form]
    `(is ~form nil))
   ([form msg]
@@ -190,7 +223,10 @@
             (println (str "    ✗ " ~(or msg (str form))))
             (~'js/process.exit 1)))))))
 
-(defmacro run-tests [& _args]
+(defmacro run-tests
+  "Print a success message indicating all tests have completed.
+   Compatible with clojure.test/run-tests interface (ignores arguments)."
+  [& _args]
   `(println "\nTests completed successfully! ✓"))
 
 ;; setf: Common Lisp-style generalized assignment
