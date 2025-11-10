@@ -111,7 +111,9 @@
           :cljs (nth ~arr ~idx))))
 
 (comment
-  (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2))
+  (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2)
+  (setf (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2) "hello")
+  (push-end (make-array 5 :initial-contents [1 2 3 4 5]) 2))
 
 ;; aloop macro for optimized array iteration with O(1) access
 ;; Usage: (aloop arr elem [state-var1 init1 ...] body)
@@ -146,7 +148,10 @@
     ;; ClojureScript or Squint - both use .push for JavaScript arrays
     `(.push ~xs ~val)
     ;; Clojure - use .add for Java Lists
-    `(.add ^java.util.List ~xs ~val)))
+    `(let [xs# ~xs]
+       (cond-> xs#
+         (.isArray (class xs#)) (->> (java.util.Arrays/asList) (new java.util.ArrayList))
+         :always (doto (.add ^java.util.List ~val))))))
 
 
 ;; Test framework macros for Squint
