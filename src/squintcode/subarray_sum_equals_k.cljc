@@ -1,6 +1,6 @@
 (ns squintcode.subarray-sum-equals-k
-  #?(:cljs (:require-macros [squintcode.macros :refer [aloop make-hash-table gethash setf]]))
-  #?(:clj  (:require [squintcode.macros :refer [aloop make-hash-table gethash setf]])))
+  #?(:cljs (:require-macros [squintcode.macros :refer [aloop dict gethash setf]]))
+  #?(:clj  (:require [squintcode.macros :refer [aloop dict gethash setf]])))
 
 (defn incf [m k default]
   (if-let [v (gethash m k)]
@@ -14,7 +14,7 @@
   (aloop num-seq num
          [running-sum 0
           result 0
-          prefix-sum-frequencies (make-hash-table 0 1)]
+          prefix-sum-frequencies (dict 0 1)]
          (if num
            (let [running-sum' (+ running-sum num) ]
              (recur running-sum'

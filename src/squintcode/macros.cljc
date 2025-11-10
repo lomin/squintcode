@@ -11,7 +11,7 @@
     (name k)
     k))
 
-(defmacro make-hash-table
+(defmacro dict
   "Create a mutable map efficiently.
    - CLJ  : returns a java.util.HashMap with k/vs inserted via .put
    - CLJS : returns a JS Map with k/vs inserted via .set (keywords converted to strings at compile time)
@@ -29,7 +29,7 @@
          ~@(for [[k v] pairs]
              `(.put ~k ~v))))))
 
-(comment (make-hash-table :a 1))
+(comment (dict :a 1))
 
 (defmacro gethash
   "Get value from hash table, similar to Common Lisp's gethash.
