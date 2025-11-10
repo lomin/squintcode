@@ -103,6 +103,16 @@
            (aset arr# idx# ~body)))
        arr#)))
 
+(defmacro aref
+  "Access element at index in an array, similar to Common Lisp's aref."
+  [arr idx]
+  `(do #?(:squint (aget ~arr ~idx)
+          :clj (nth ~arr ~idx)
+          :cljs (nth ~arr ~idx))))
+
+(comment
+  (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2))
+
 ;; aloop macro for optimized array iteration with O(1) access
 ;; Usage: (aloop arr elem [state-var1 init1 ...] body)
 ;; In body, use (recur ...) which implicitly increments the index
@@ -116,7 +126,7 @@
            len# (count arr#)]
        (loop [~idx 0
               ~@state-bindings]
-         (let [~elem-var (when (< ~idx len#) (nth arr# ~idx))]
+         (let [~elem-var (when (< ~idx len#) (aget arr# ~idx))]
            ~@(map #(postwalk replace-recur %) body))))))
 
 (defmacro push-end
@@ -138,22 +148,6 @@
     ;; Clojure - use .add for Java Lists
     `(.add ^java.util.List ~xs ~val)))
 
-(defmacro aref
-  "Access element at index in an array/list, similar to Common Lisp's aref.
-
-   Platform-specific behavior:
-   - CLJ         : uses (aget arr idx) for Java arrays
-   - Squint/CLJS : expands to (aget arr idx) for JavaScript array access
-
-   Returns the element at the specified index.
-
-   Usage: (aref arr 0) ; get first element"
-  [arr idx]
-  (if (:ns &env)
-    ;; ClojureScript or Squint - use aget for JavaScript arrays
-    `(aget ~arr ~idx)
-    ;; Clojure - use aget for Java arrays
-    `(aget ~arr ~idx)))
 
 ;; Test framework macros for Squint
 (defmacro deftest [name & body]
