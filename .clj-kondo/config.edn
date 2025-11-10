@@ -1,1 +1,2 @@
-{:hooks {:analyze-call {squintcode.macros/aloop hooks.aloop/aloop}}}
+{:hooks {:analyze-call {squintcode.macros/aloop hooks.aloop/aloop}}
+ :lint-as {squintcode.macros/forv clojure.core/for}}

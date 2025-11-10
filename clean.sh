@@ -1,12 +1,18 @@
 #!/bin/bash
 # Clean build artifacts
 
+set -e  # Exit on any error
+
 echo "Cleaning build artifacts..."
 
-# Remove all .js files from out/ (except .mjs in subdirectories)
+# Remove final output files
 rm -f out/*.js
 
-# Remove all .bundle.js files
+# Remove intermediate files to prevent caching issues
 rm -f out/*.bundle.js
+rm -f out/squintcode/*.mjs
 
-echo "Clean complete!"
+# Remove ClojureScript cache directories
+rm -rf cljs-test-runner-out .cljs_node_repl .cljsbuild
+
+echo "✓ Clean complete!"

@@ -131,15 +131,48 @@ For multiple test namespaces:
            'squintcode.another-test)
 ```
 
-### Run Tests Once
+### Run Tests
+
+This project supports testing across three platforms: **Clojure**, **ClojureScript**, and **Squint**.
+
+#### Run All Tests (All Platforms)
+
+Run tests on all three platforms with a single command:
+
+```bash
+./test-all-platforms.sh
+```
+
+This will sequentially run:
+1. Clojure tests
+2. Squint tests
+3. ClojureScript tests
+
+#### Clojure Tests
+
+Run all Clojure tests (auto-discovers test namespaces):
+
+```bash
+clojure -M run-clj-tests.clj
+```
+
+Or run a specific test namespace:
+
+```bash
+clojure -M -e "(require 'squintcode.push-end-test) (clojure.test/run-tests 'squintcode.push-end-test)"
+```
+
+#### ClojureScript Tests
+
+Run all ClojureScript tests once:
 
 ```bash
 clj -M:test
 ```
 
-Uses [cljs-test-runner](https://github.com/Olical/cljs-test-runner) (the canonical ClojureScript test runner) to automatically discover and run all tests in the `test/` directory via Node.js.
+Uses [cljs-test-runner](https://github.com/Olical/cljs-test-runner) to automatically discover and run all tests in the `test/` directory via Node.js.
 
-### Continuous Test Runner
+Or use the continuous test runner (watches for file changes):
 
 ```bash
 clj -M:test-watch
@@ -150,6 +183,29 @@ Watches `src/` and `test/` directories for changes and automatically re-runs tes
 - Watches for file changes
 - Automatically re-runs tests when you save files
 - Press `Ctrl+C` to stop
+
+#### Squint Tests
+
+Run a single Squint test file:
+
+```bash
+./test-one.sh <test-name>
+```
+
+Examples:
+```bash
+./test-one.sh fizzbuzz_test
+./test-one.sh push_end_test
+./test-one.sh aref_test
+```
+
+Or run all Squint tests:
+
+```bash
+./test-all.sh
+```
+
+**Note**: Test files use `.cljc` extension and contain reader conditionals to work across all three platforms (CLJ, CLJS, Squint).
 
 ## Using with Calva (VSCode)
 

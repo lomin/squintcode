@@ -1,5 +1,6 @@
 (ns squintcode.fizzbuzz
-  (:require-macros [squintcode.macros :refer [forv]]))
+  #?(:cljs (:require-macros [squintcode.macros :refer [forv]]))
+  #?(:clj  (:require [squintcode.macros :refer [forv]])))
 
 (defn fizz-buzz-pred [a b]
   (zero? (mod b a)))

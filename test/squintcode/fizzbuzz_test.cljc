@@ -1,6 +1,10 @@
 (ns squintcode.fizzbuzz-test
-  (:require [cljs.test :refer-macros [deftest is testing] :refer [run-tests]]
-            [squintcode.fizzbuzz :refer [fizzBuzz]]))
+  (:require #?@(:squint []
+                :clj [[clojure.test :refer [deftest is testing run-tests]]]
+                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]])
+            [squintcode.fizzbuzz :refer [fizzBuzz]]
+            #?(:squint ["assert" :as assert]))
+  #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing run-tests]])))
 
 (deftest fizzbuzz-basic-test
   (testing "FizzBuzz with n=15"

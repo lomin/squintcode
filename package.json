@@ -4,11 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "./build-all.sh",
-    "build:all": "./build-all.sh",
+    "test": "./test-all.sh",
+    "test:one": "./test-one.sh",
+    "build": "npm run clean && ./build-all.sh",
     "build:one": "./build-one.sh",
-    "clean": "./clean.sh"
+    "clean": "rm -rf out/"
   },
   "keywords": [],
   "author": "",
@@ -16,5 +16,8 @@
   "type": "commonjs",
   "dependencies": {
     "squint-cljs": "^0.9.177"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }

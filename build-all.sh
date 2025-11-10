@@ -1,8 +1,14 @@
 #!/bin/bash
 # Build script to compile all Squint problems for LeetCode
 
-echo "Cleaning old build artifacts..."
-rm -f out/*.js
+set -e  # Exit on any error
+
+# Compile macros first (required dependency for all problems)
+if [ -f "src/squintcode/macros.cljc" ]; then
+  echo "Compiling macros.cljc..."
+  npx squint compile src/squintcode/macros.cljc > /dev/null
+  echo "✓ Macros compiled"
+fi
 
 echo "Building all LeetCode problems..."
 echo
