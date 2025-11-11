@@ -124,7 +124,7 @@ source.cljc
     ↓
 out/squintcode/source.mjs (ES modules)
     ↓
-[esbuild bundle]
+[esbuild bundle --format=esm]
     ↓
 out/source.bundle.js (with exports)
     ↓
@@ -139,6 +139,11 @@ out/source.js (final, LeetCode-ready)
 3. Bundle with esbuild (tree-shaking enabled)
 4. Remove ES module exports (make standalone)
 5. Output to `out/<problem>.js`
+
+**IMPORTANT**: The esbuild bundling step MUST use `--format=esm`, not `--format=iife`:
+- `--format=esm` produces clean code with `export { ... }` at the end, which we strip out
+- `--format=iife` wraps everything in `(() => { ... })()` which LeetCode doesn't accept
+- The final output must be standalone JavaScript with no module wrappers or exports
 
 ### Multi-Platform Macro System
 

@@ -217,7 +217,7 @@
                (println "Bundling with esbuild...")
                (shell (str "npx esbuild " mjs-file
                            " --outfile=" bundle-file
-                           " --format=iife --bundle --tree-shaking=true"))
+                           " --format=esm --bundle --tree-shaking=true"))
 
                ;; Remove export statements (only at end of file)
                (println "Removing export statements...")
