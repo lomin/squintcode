@@ -7,12 +7,11 @@
 
 (defn fizzBuzz [n]
   (forv [i (range 1 (inc n))]
-    (condp fizz-buzz-pred i
-      15 "FizzBuzz"
-      3  "Fizz"
-      5  "Buzz"
-      (str i))))
+        (condp fizz-buzz-pred i
+          15 "FizzBuzz"
+          3  "Fizz"
+          5  "Buzz"
+          (str i))))
 
 (comment
-  (fizzBuzz 4)
-  )
+  (fizzBuzz 4))

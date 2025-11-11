@@ -1,294 +1,269 @@
-# Dual Squint/ClojureScript Project
+# LeetCode Solutions in Multi-Platform Clojure
 
-This project supports both **Squint** (for compiling to LeetCode-compatible JavaScript) and **ClojureScript** (for REPL-driven development and testing).
+Solve LeetCode problems using ClojureScript-like syntax that compiles to optimized JavaScript, with full test coverage across three platforms.
+
+## Features
+
+- ✅ **Squint** - Compiles to LeetCode-compatible JavaScript
+- ✅ **Clojure (JVM)** - Tests with native Java collections
+- ✅ **ClojureScript** - Interactive REPL development
+- ✅ **Common Lisp-style macros** - Array manipulation (`make-array`, `aref`, `setf`)
+- ✅ **Mutable data structures** - HashMap/Map operations optimized for performance
+- ✅ **Babashka build system** - Fast, unified task orchestration
+
+## Prerequisites
+
+- [Babashka](https://babashka.org/) - Fast Clojure scripting runtime
+- [Clojure CLI tools](https://clojure.org/guides/install_clojure) - For REPL and ClojureScript tests
+- [Node.js](https://nodejs.org/) - For running compiled JavaScript
+- [Bun](https://bun.sh/) or npm - For JavaScript bundling
+
+## Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Run all tests (Squint → Clojure → ClojureScript)
+bb test
+
+# Build all problems for LeetCode
+bb build
+
+# Build a single problem
+bb build-one fizzbuzz
+```
+
+## Available Commands
+
+### Testing
+
+```bash
+bb test              # Run all tests on all platforms
+bb test-squint       # Squint tests only (LeetCode-identical environment)
+bb test-clj          # Clojure JVM tests only
+bb test-cljs         # ClojureScript tests only
+```
+
+**Test order**: Squint → Clojure → ClojureScript (fails fast)
+
+### Building
+
+```bash
+bb build             # Build all problems
+bb build-one <name>  # Build single problem (e.g., bb build-one twosum)
+bb clean             # Clean all build artifacts
+```
+
+### npm Shortcuts
+
+All `bb` commands are also available via npm:
+
+```bash
+npm test             # Same as bb test
+npm run build        # Same as bb build
+npm run build:one    # Same as bb build-one
+```
+
+## Development Workflow
+
+### Option 1: Test-Driven Development (Recommended)
+
+```bash
+# Terminal 1: Watch and run ClojureScript tests
+clj -M:test-watch
+
+# Terminal 2: Edit code in your favorite editor
+# Tests re-run automatically on save
+```
+
+### Option 2: REPL-Driven Development
+
+```bash
+# Start ClojureScript REPL
+clj -M:repl
+```
+
+Then in the REPL:
+
+```clojure
+;; Load your solution
+(require '[squintcode.fizzbuzz :refer [fizzBuzz]])
+
+;; Test it interactively
+(fizzBuzz 15)
+;; => ["1" "2" "Fizz" "4" "Buzz" ... "FizzBuzz"]
+
+;; Load and run tests
+(require '[cljs.test :refer [run-tests]]
+         '[squintcode.fizzbuzz-test])
+(run-tests 'squintcode.fizzbuzz-test)
+```
+
+### Option 3: Calva (VSCode)
+
+1. Open project in VSCode with [Calva](https://calva.io/) installed
+2. Press `Ctrl+Alt+C Ctrl+Alt+J` (Mac: `Cmd+Option+C Cmd+Option+J`)
+3. Select "deps.edn" → `:repl` alias
+4. Evaluate code with `Ctrl+Alt+C E` or run tests with `Ctrl+Alt+C T`
 
 ## Project Structure
 
 ```
-squintcode/
-├── src/
-│   └── squintcode/
-│       ├── macros.cljc        # Shared macros (works in both Squint and ClojureScript)
-│       ├── fizzbuzz.cljs      # Example: FizzBuzz problem
-│       └── maxprofit.cljs     # Example: Max Profit problem
-├── test/
-│   └── squintcode/
-│       ├── test_runner.cljs    # Test runner entry point
-│       └── fizzbuzz_test.cljs  # Unit tests
-├── out/                   # Build outputs
-├── squint.edn            # Squint configuration
-├── deps.edn              # ClojureScript dependencies and aliases
-├── build-all.sh          # Build all problems
-├── build-one.sh          # Build a single problem
-├── build-squintcode.sh   # Backwards compatibility (calls build-all.sh)
-└── package.json          # npm scripts
+.
+├── bb.edn                    # Babashka tasks (build system)
+├── deps.edn                  # ClojureScript config
+├── squint.edn                # Squint compiler config
+├── package.json              # npm scripts
+├── src/squintcode/
+│   ├── macros.cljc           # All macros (Common Lisp-style)
+│   ├── fizzbuzz.cljc         # Example solutions
+│   └── *.cljc                # Your solutions here
+├── test/squintcode/
+│   └── *_test.cljc           # Multi-platform tests
+└── out/
+    └── *.js                  # LeetCode-ready JavaScript files
 ```
 
-## Prerequisites
+## Adding a New Problem
 
-- Node.js and npm
-- [Clojure CLI tools](https://clojure.org/guides/install_clojure) (`clj` command)
-- [Bun](https://bun.sh/) for bundling
-- [Calva](https://calva.io/) extension for VSCode (optional, for REPL)
-
-## Squint Usage (LeetCode Builds)
-
-Squint compiles ClojureScript-like code to optimized JavaScript suitable for LeetCode.
-
-### Build All Problems
-
-```bash
-npm run build
-# or
-./build-all.sh
-```
-
-This will compile **all** `.cljs` files in `src/squintcode/` and output individual files to `out/`:
-- `out/fizzbuzz.js`
-- `out/maxprofit.js`
-- etc.
-
-Each output file can be directly pasted into LeetCode.
-
-### Build a Single Problem
-
-```bash
-npm run build:one <problem-name>
-# or
-./build-one.sh <problem-name>
-```
-
-Example:
-```bash
-./build-one.sh fizzbuzz
-```
-
-This will:
-1. Compile `src/squintcode/fizzbuzz.cljs` with Squint
-2. Bundle all dependencies with Bun
-3. Remove export statements
-4. Output a single file: `out/fizzbuzz.js`
-
-### Manual Squint Compilation
-
-```bash
-npx squint compile src/squintcode/<problem>.cljs
-```
-
-Output goes to `out/squintcode/<problem>.mjs` (as configured in `squint.edn`).
-
-## ClojureScript Usage (Development & Testing)
-
-ClojureScript provides a full REPL experience with hot-reloading and testing support.
-
-### Start a REPL
-
-```bash
-clj -M:repl
-```
-
-This starts a Node.js-based ClojureScript REPL. You can then:
+1. **Create solution file**: `src/squintcode/twosum.cljc`
 
 ```clojure
-;; Load and test FizzBuzz
-(require '[squintcode.fizzbuzz :refer [fizzBuzz]])
-(fizzBuzz 15)
-;; => ["1" "2" "Fizz" "4" "Buzz" ... "FizzBuzz"]
+(ns squintcode.twosum
+  #?(:cljs (:require-macros [squintcode.macros :refer [aref]]))
+  #?(:clj  (:require [squintcode.macros :refer [aref]])))
 
-;; Load and test MaxProfit
-(require '[squintcode.maxprofit :refer [maxProfit]])
-(maxProfit [7 1 5 3 6 4])
-;; => 5
+(defn twoSum [nums target]
+  ;; Your solution here
+  )
 ```
 
-### Run Tests in the REPL
-
-To run tests directly in the REPL:
+2. **Create test file**: `test/squintcode/twosum_test.cljc`
 
 ```clojure
-;; Load the test namespace and cljs.test
-(require '[cljs.test :refer [run-tests]]
-         '[squintcode.fizzbuzz-test])
+(ns squintcode.twosum-test
+  (:require #?@(:squint []
+                :clj [[clojure.test :refer [deftest is testing]]]
+                :cljs [[cljs.test :refer-macros [deftest is testing]]])
+            [squintcode.twosum :refer [twoSum]])
+  #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing]])))
 
-;; Run the tests
-(run-tests 'squintcode.fizzbuzz-test)
+(deftest twosum-test
+  (testing "Basic case"
+    (is (= [0 1] (twoSum [2 7 11 15] 9)))))
 ```
 
-To re-run tests after making changes:
+3. **Run tests**:
+
+```bash
+bb test
+```
+
+4. **Build for LeetCode**:
+
+```bash
+bb build-one twosum
+# Output: out/twosum.js
+```
+
+5. **Submit**: Copy contents of `out/twosum.js` to LeetCode
+
+## Common Lisp-Style Macros
+
+This project provides familiar Common Lisp operations:
+
+### Arrays
 
 ```clojure
-;; Reload the namespace to pick up changes
-(require '[squintcode.fizzbuzz-test] :reload)
+;; Create array
+(make-array 5)                                  ; empty array of size 5
+(make-array 5 :initial-contents [1 2 3 4 5])   ; with initial values
 
-;; Run the tests again
-(run-tests 'squintcode.fizzbuzz-test)
+;; Read element
+(cl/aref arr 2)  ; get element at index 2
+
+;; Modify element
+(setf (cl/aref arr 2) 99)  ; set element at index 2 to 99
+
+;; Iterate over array
+(aloop arr elem [sum 0]
+  (if elem
+    (recur (+ sum elem))
+    sum))
 ```
 
-For multiple test namespaces:
+### Hash Tables
 
 ```clojure
-(run-tests 'squintcode.fizzbuzz-test
-           'squintcode.another-test)
+;; Create hash table
+(dict :a 1 :b 2 :c 3)
+
+;; Get value
+(gethash ht :a)         ; returns value or nil
+(gethash ht :x 0)       ; returns value or default (0)
+
+;; Set value
+(setf (gethash ht :d) 4)
 ```
 
-### Run Tests
+### Other Operations
 
-This project supports testing across three platforms: **Clojure**, **ClojureScript**, and **Squint**.
+```clojure
+;; Append to array (mutates in place)
+(push-end arr 42)
 
-#### Run All Tests (All Platforms)
-
-Run tests on all three platforms with a single command:
-
-```bash
-./test-all-platforms.sh
+;; Array comprehension
+(forv [i (range 0 10)] (* i 2))  ; => [0 2 4 6 8 10 12 14 16 18]
 ```
 
-This will sequentially run:
-1. Clojure tests
-2. Squint tests
-3. ClojureScript tests
+## Multi-Platform Testing
 
-#### Clojure Tests
+All tests run on three platforms to ensure correctness:
 
-Run all Clojure tests (auto-discovers test namespaces):
+1. **Squint** - Tests JavaScript output in Node.js (identical to LeetCode)
+2. **Clojure** - Tests logic with JVM and Java collections
+3. **ClojureScript** - Tests with Google Closure Compiler optimizations
 
-```bash
-clojure -M run-clj-tests.clj
-```
+Each platform uses different underlying data structures but the same test code works everywhere thanks to reader conditionals.
 
-Or run a specific test namespace:
+## Why Babashka?
 
-```bash
-clojure -M -e "(require 'squintcode.push-end-test) (clojure.test/run-tests 'squintcode.push-end-test)"
-```
+- **Fast startup** - Tasks execute nearly instantly
+- **Single source of truth** - All build logic in `bb.edn`
+- **Cross-platform** - Works on Linux, macOS, Windows
+- **DRY** - npm scripts simply delegate to `bb` tasks
+- **Composable** - Task dependencies ensure correct execution order
 
-#### ClojureScript Tests
+## Tips
 
-Run all ClojureScript tests once:
+- **Use watch mode** during development: `clj -M:test-watch`
+- **Test before building**: `bb test` catches errors early
+- **Check file sizes**: Large builds may timeout on LeetCode
+- **Profile with Squint tests**: They run in the same environment as LeetCode
 
-```bash
-clj -M:test
-```
+## Troubleshooting
 
-Uses [cljs-test-runner](https://github.com/Olical/cljs-test-runner) to automatically discover and run all tests in the `test/` directory via Node.js.
+**"command not found: bb"**
+- Install babashka: https://babashka.org/#installation
 
-Or use the continuous test runner (watches for file changes):
+**"npx: command not found"**
+- Install Node.js: https://nodejs.org/
 
-```bash
-clj -M:test-watch
-```
+**"Cannot find module"**
+- Run `npm install` to install dependencies
 
-Watches `src/` and `test/` directories for changes and automatically re-runs tests. This is the **recommended way** for test-driven development:
-- Runs tests immediately on startup
-- Watches for file changes
-- Automatically re-runs tests when you save files
-- Press `Ctrl+C` to stop
+**Tests fail on one platform only**
+- Check reader conditionals (`:squint` must come before `:cljs`)
+- Verify platform-specific code is correct
 
-#### Squint Tests
+## Learn More
 
-Run a single Squint test file:
+- [CLAUDE.md](CLAUDE.md) - Detailed architecture and development guide
+- [Babashka](https://book.babashka.org/) - Task runner documentation
+- [Squint](https://github.com/squint-cljs/squint) - ClojureScript-like compiler
+- [ClojureScript](https://clojurescript.org/) - REPL and advanced features
 
-```bash
-./test-one.sh <test-name>
-```
+## License
 
-Examples:
-```bash
-./test-one.sh fizzbuzz_test
-./test-one.sh push_end_test
-./test-one.sh aref_test
-```
-
-Or run all Squint tests:
-
-```bash
-./test-all.sh
-```
-
-**Note**: Test files use `.cljc` extension and contain reader conditionals to work across all three platforms (CLJ, CLJS, Squint).
-
-## Using with Calva (VSCode)
-
-### Connect to REPL
-
-1. Open the project in VSCode
-2. Press `Ctrl+Alt+C Ctrl+Alt+J` (or `Cmd+Option+C Cmd+Option+J` on Mac)
-3. Select "deps.edn"
-4. Choose the `:repl` alias
-
-Calva will start a ClojureScript REPL connected to your editor.
-
-### Running Tests in Calva
-
-With the REPL connected:
-1. Open `test/squintcode/fizzbuzz_test.cljs`
-2. Press `Ctrl+Alt+C T` to run tests in the current namespace
-3. Or use `Ctrl+Alt+C Ctrl+Alt+T` to run all tests
-
-### Evaluating Code
-
-- `Ctrl+Alt+C E`: Evaluate current form
-- `Ctrl+Alt+C Space`: Evaluate top-level form
-- Load current file: `Ctrl+Alt+C Enter`
-
-## Macro Setup
-
-Macros are defined in `src/squintcode/macros.cljc`.
-
-**Important**: The macro file uses `.cljc` extension to work with both Squint and ClojureScript.
-
-## Available npm Scripts
-
-```bash
-npm run build           # Build all problems for LeetCode
-npm run build:all       # Build all problems (same as above)
-npm run build:one NAME  # Build a single problem (e.g., npm run build:one fizzbuzz)
-npm run clean           # Clean all build artifacts from out/
-```
-
-Note: `npm run build` automatically cleans old `.js` files before building.
-
-## Available clj Aliases
-
-```bash
-clj -M:repl         # Start ClojureScript REPL
-clj -M:test         # Run tests once
-clj -M:test-watch   # Continuous test runner
-```
-
-## Example Workflow
-
-### For LeetCode Problems
-
-1. Write your solution in `src/squintcode/<problem>.cljs`
-2. Build all: `npm run build` or build one: `npm run build:one <problem>`
-3. Copy contents of `out/<problem>.js` to LeetCode
-
-Example:
-```bash
-# Create a new problem
-vim src/squintcode/twosum.cljs
-
-# Build just that problem
-./build-one.sh twosum
-
-# Copy out/twosum.js to LeetCode
-```
-
-### For Development with Tests
-
-1. Start Calva REPL in VSCode or use `clj -M:repl`
-2. Write code in `src/squintcode/`
-3. Write tests in `test/squintcode/`
-4. Run tests with `clj -M:test-watch` or via Calva
-5. Iterate in the REPL
-6. Build for LeetCode when ready
-
-## Notes
-
-- The project uses multi-segment namespaces (e.g., `squintcode.fizzbuzz`) which is the ClojureScript convention.
-- File paths must match namespace structure: `squintcode.fizzbuzz` → `src/squintcode/fizzbuzz.cljs`.
-- Squint output is optimized for size and compatibility with LeetCode's JavaScript runtime.
-- ClojureScript tests use [cljs-test-runner](https://github.com/Olical/cljs-test-runner), the canonical test runner for ClojureScript projects.
-- Tests run in Node.js by default and automatically discover all test namespaces.
-- Watch mode (`clj -M:test-watch`) automatically re-runs tests when files change - perfect for TDD.
+ISC

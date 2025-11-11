@@ -11,51 +11,134 @@ This is a multi-platform ClojureScript project that supports three compilation t
 
 All source files use `.cljc` extension with reader conditionals to support all three platforms.
 
+The build and test system is orchestrated by **Babashka** (`bb.edn`), providing a single source of truth for all build tasks.
+
 ## Commands
+
+All commands are run through Babashka. The `package.json` npm scripts delegate to `bb` tasks for convenience.
 
 ### Testing
 
 ```bash
-# Run ALL tests on all three platforms (Clojure, Squint, ClojureScript)
-./test-all-platforms.sh
+# Run ALL tests on all three platforms (Squint → Clojure → ClojureScript)
+bb test              # or: npm test
 
-# Clojure tests only (auto-discovers test namespaces)
-clojure -M run-clj-tests.clj
-
-# ClojureScript tests only
-clj -M:test
-
-# ClojureScript tests with watch mode (recommended for TDD)
-clj -M:test-watch
-
-# Single Squint test
-./test-one.sh <test-name>   # e.g., ./test-one.sh fizzbuzz_test
-
-# All Squint tests
-./test-all.sh
+# Run tests for a single platform
+bb test-squint       # or: npm run test:squint
+bb test-clj          # or: npm run test:clj
+bb test-cljs         # or: npm run test:cljs
 ```
+
+**Test execution order**: Squint → Clojure → ClojureScript (fails fast on first platform failure)
+
+**Squint test environment**: Tests are compiled, bundled with esbuild, and run with Node.js in an environment **identical to LeetCode's JavaScript runtime**.
 
 ### Building
 
 ```bash
 # Build all problems for LeetCode
-npm run build
+bb build             # or: npm run build
 
 # Build a single problem
-npm run build:one <problem>   # e.g., npm run build:one fizzbuzz
+bb build-one <problem>   # or: npm run build:one <problem>
+# Example: bb build-one fizzbuzz
 
 # Clean build artifacts
-npm run clean
+bb clean             # or: npm run clean
 ```
 
 ### Development REPL
 
 ```bash
-# Start ClojureScript REPL
+# Start ClojureScript REPL (not managed by babashka)
 clj -M:repl
 ```
 
 ## Architecture
+
+### Babashka Task System
+
+The entire build and test process is defined in `bb.edn` with the following task organization:
+
+#### Task Categories
+
+**Clean Tasks**:
+- `-clean-js` - Remove JavaScript build artifacts (`.js`, `.bundle.js`, `.mjs`)
+- `-clean-cljs-cache` - Remove ClojureScript cache directories
+- `clean` - Run all clean tasks
+
+**Compilation Tasks**:
+- `-compile-macros` - Compile `macros.cljc` (required dependency for all Squint code)
+- `-compile-squint-sources` - Compile all source `.cljc` files (excluding macros and tests)
+
+**Test Tasks**:
+- `test-squint` - Run Squint tests in LeetCode-identical environment
+- `test-clj` - Run Clojure (JVM) tests
+- `test-cljs` - Run ClojureScript tests
+- `test` - Run all tests in order (depends on all three)
+
+**Build Tasks**:
+- `build-one <problem>` - Build single problem for LeetCode
+- `build-all` - Build all problems
+- `build` - Alias for `build-all`
+
+#### Task Dependencies
+
+Tasks use `:depends` to ensure correct execution order:
+
+```
+test-squint: clean → compile-macros → compile-squint-sources → test-squint
+test-clj: (independent, no clean)
+test-cljs: (independent, no clean)
+test: aggregates all three (test-squint cleans first)
+
+build: clean → compile-macros → build-all
+build-one: (compiles macros internally)
+```
+
+**Key principle**: Macros must **always** be compiled first before any Squint source or test files.
+
+### Squint Test Execution (LeetCode-Identical)
+
+The `test-squint` task ensures tests run in **exactly the same environment** as LeetCode submissions:
+
+1. **Compile macros**: `npx squint compile src/squintcode/macros.cljc`
+2. **For each test file**:
+   - Compile source file (if exists): `npx squint compile src/squintcode/<problem>.cljc`
+   - Compile test file: `npx squint compile test/squintcode/<problem>_test.cljc`
+   - Bundle test with esbuild: `npx esbuild <test>.mjs --outfile=<test>.bundle.js --format=esm --bundle --tree-shaking=true --platform=node`
+   - Remove export statements (strip ES module exports)
+   - Run with Node.js: `node out/<problem>_test.js`
+   - Capture exit code (0 = pass, 1 = fail)
+
+**Why this matters**: The Squint tests use the same compilation and bundling pipeline as LeetCode submissions, ensuring test behavior matches production behavior.
+
+### Build Pipeline (Squint → LeetCode)
+
+The `build-one` and `build-all` tasks create LeetCode-ready JavaScript files:
+
+```
+source.cljc
+    ↓
+[Squint compile]
+    ↓
+out/squintcode/source.mjs (ES modules)
+    ↓
+[esbuild bundle]
+    ↓
+out/source.bundle.js (with exports)
+    ↓
+[Remove export statements]
+    ↓
+out/source.js (final, LeetCode-ready)
+```
+
+**Key steps**:
+1. Compile macros first (dependency)
+2. Compile source file
+3. Bundle with esbuild (tree-shaking enabled)
+4. Remove ES module exports (make standalone)
+5. Output to `out/<problem>.js`
 
 ### Multi-Platform Macro System
 
@@ -63,22 +146,18 @@ clj -M:repl
 
 All macros are consolidated in `src/squintcode/macros.cljc`:
 - Test framework macros: `deftest`, `is`, `testing`, `run-tests`
-- Common Lisp-style macros: `make-array`, `aref`, `setf`
-- Utility macros: `push-end`, `new-map`, `forv`, etc.
+- Common Lisp-style macros: `make-array`, `aref`, `setf`, `gethash`, `dict`
+- Utility macros: `push-end`, `forv`, `aloop`, `postwalk`
 
-**Note**: The namespace uses `(:refer-clojure :exclude [make-array])` to avoid warnings about shadowing `clojure.core/make-array`. This works without reader conditionals on all three platforms (Squint simply ignores it since it doesn't have `clojure.core/make-array`).
+**Note**: The namespace uses `(:refer-clojure :exclude [make-array])` to avoid warnings about shadowing `clojure.core/make-array`. This works without reader conditionals on all three platforms.
 
-**Why**: Squint's namespace handling differs from ClojureScript. When you try to require macros from multiple namespaces like this:
+**Why**: Squint's namespace handling differs from ClojureScript. Multiple namespaces in `:require-macros` will not work:
 
 ```clojure
 ;; ❌ DOES NOT WORK in Squint
 #?(:squint (:require-macros [namespace-a :refer [macro1]]
                              [namespace-b :refer [macro2]]))
-```
 
-Only one namespace will be loaded and macros won't expand correctly. Instead:
-
-```clojure
 ;; ✅ WORKS - all macros in one namespace
 #?(:squint (:require-macros [squintcode.macros :refer [macro1 macro2]]))
 ```
@@ -101,7 +180,7 @@ All test files are `.cljc` files with reader conditionals for platform-specific 
 
 ;; Usage: unqualified
 (let [arr (make-array 5 :initial-contents [1 2 3 4 5])]
-  (setf (aref arr 2) 99))
+  (setf (cl/aref arr 2) 99))
 ```
 
 **Option 2: Import with `:as` (namespace-qualified usage)**
@@ -126,7 +205,7 @@ All test files are `.cljc` files with reader conditionals for platform-specific 
 - CLJS: Test macros via `:refer-macros`, other macros via `:require-macros`
 - CLJ: All macros via regular `:require`
 - Both `:refer` and `:as` work on all platforms
-- The `setf` macro is smart enough to recognize both `(aref ...)` and `(cl/aref ...)` forms
+- The `setf` macro is smart enough to recognize both `(cl/aref ...)` and `(cl/aref ...)` forms
 
 ### Reader Conditional Ordering
 
@@ -145,81 +224,59 @@ Squint defines both `:squint` and `:cljs` features. Reader conditionals match th
    :squint (squint-specific-code))
 ```
 
-### Platform-Specific Collections
-
-Test code uses different collection types per platform:
-
-- **Squint/CLJS**: `#js [...]` for JavaScript arrays
-- **Clojure**:
-  - `(into-array [1 2 3])` for Java arrays (used with `aref`)
-  - `java.util.ArrayList` for mutable lists (used with `push-end`)
-
-Example from tests:
-```clojure
-#?(:squint
-   (let [arr #js [1 2 3]]
-     (is (= 1 (aref arr 0))))
-
-   :clj
-   (let [arr (into-array [1 2 3])]
-     (is (= 1 (aref arr 0)))))
-
-;; For push-end with ArrayList
-#?(:squint
-   (let [arr #js [1 2 3]]
-     (push-end arr 4)
-     (is (= 4 (.-length arr))))
-
-   :clj
-   (let [lst (java.util.ArrayList. [1 2 3])]
-     (push-end lst 4)
-     (is (= 4 (.size lst)))))
-```
-
 ### Macro Implementation Patterns
+
+#### Pattern 1: Using `&env` to detect platform (works for runtime detection)
 
 Use `&env` to detect ClojureScript/Squint vs Clojure at macro expansion time:
 
 ```clojure
-(defmacro aref [arr idx]
+(defmacro make-array [size & {:keys [initial-contents]}]
   (if (:ns &env)
     ;; ClojureScript or Squint - :ns key is present in &env
-    `(aget ~arr ~idx)
-    ;; Clojure - &env is empty map, also uses aget for Java arrays
-    `(aget ~arr ~idx)))
+    `(js/Array. ~size)
+    ;; Clojure - &env is empty map
+    `(java.util.ArrayList. ~size)))
 ```
 
-**Why this works**: ClojureScript compiler adds `:ns` key to `&env` during macro expansion. Clojure does not. In this case, both platforms use `aget` since it works for both JavaScript arrays and Java arrays.
+**Why this works**: ClojureScript compiler adds `:ns` key to `&env` during macro expansion. Clojure does not.
 
-### Build System
+**When to use**: Use this pattern for macros that need to emit different code based on whether the macro is being expanded in a ClojureScript/Squint context vs Clojure context. This is the standard approach when you need runtime platform detection.
 
-Squint compilation happens in two phases:
+#### Pattern 2: Reader conditionals at defmacro level (required for SCI compatibility)
 
-1. **Compilation**: `npx squint compile <file>` produces `.mjs` files in `out/`
-2. **Bundling** (for LeetCode): Bun bundles dependencies and removes exports
+**IMPORTANT**: Squint's SCI (Small Clojure Interpreter) cannot parse syntax-quoted reader conditionals (`` `#?(...) ``) inside macro bodies. When a macro needs to return platform-specific code at macro expansion time, you must use reader conditionals at the `defmacro` level instead:
 
-The `test-all.sh` script compiles all source files first to ensure dependencies are available:
+```clojure
+;; ❌ DOES NOT WORK in Squint - SCI cannot parse syntax-quoted reader conditionals
+(defmacro aref [arr idx]
+  `#?(:squint (aget ~arr ~idx)
+      :clj (nth ~arr ~idx)
+      :cljs (nth ~arr ~idx)))
 
-```bash
-# Compile all source files
-for src_file in src/squintcode/*.cljc; do
-  npx squint compile "$src_file" > /dev/null 2>&1 || true
-done
+;; ❌ DOES NOT WORK - wrapping in `do` doesn't help
+(defmacro aref [arr idx]
+  `(do #?(:squint (aget ~arr ~idx)
+          :clj (nth ~arr ~idx)
+          :cljs (nth ~arr ~idx))))
 
-# Then compile and run tests
-for test_file in test/squintcode/*_test.cljc; do
-  ./test-one.sh "$test_name"
-done
+;; ✅ WORKS - reader conditionals at defmacro level
+#?(:clj
+   (defmacro aref [arr idx]
+     `(nth ~arr ~idx))
+   :default
+   (defmacro aref [arr idx]
+     `(aget ~arr ~idx)))
 ```
 
-## Key Differences Between Platforms
+**Why this matters**:
+- The pattern `` `#?(:squint ... :clj ... :cljs ...) `` compiles fine with regular Clojure/ClojureScript
+- But when Squint's SCI tries to **load and parse** the macro definition at compile-time, it fails with parse errors
+- Using reader conditionals at the `defmacro` level creates separate macro definitions per platform
+- Each platform gets a clean macro definition without problematic syntax-quoted reader conditionals
+- SCI can successfully parse and load these platform-specific macro definitions
 
-### Squint vs ClojureScript
-
-1. **Macro Loading**: Squint requires all macros in one namespace
-2. **SCI Execution**: Squint uses Small Clojure Interpreter (SCI) to execute macros at compile-time
-3. **Output**: Squint produces standalone JavaScript, ClojureScript produces modules with Google Closure Compiler
-4. **REPL**: Squint has no REPL, ClojureScript has full REPL support
+**When to use**: Use this pattern when your macro needs to return code that is fundamentally different per platform and you need Squint/SCI compatibility. This is essential for macros like `aref` and `length` that expand to completely different forms (e.g., `aget` vs `nth`, `.-length` vs `count`).
 
 ### Common Lisp-Style Array Operations
 
@@ -234,18 +291,18 @@ This project implements Common Lisp-style array manipulation:
 
 - `aref` macro: Read array elements
   ```clojure
-  (aref arr 2)  ; get element at index 2
+  (cl/aref arr 2)  ; get element at index 2
   ```
 
 - `setf` macro: Common Lisp-style generalized assignment for arrays
   ```clojure
-  (setf (aref arr 2) 99)  ; set element at index 2 to 99
+  (setf (cl/aref arr 2) 99)  ; set element at index 2 to 99
   ```
 
 **Complete example** (works on all three platforms):
 ```clojure
 (let [arr (make-array 5 :initial-contents '(1 2 3 4 5))]
-  (setf (aref arr 2) 99)  ; modify index 2
+  (setf (cl/aref arr 2) 99)  ; modify index 2
   arr)  ; => [1 2 99 4 5]
 ```
 
@@ -254,7 +311,28 @@ This project implements Common Lisp-style array manipulation:
 - `push-end` macro: **Mutates in place** on all platforms for performance
   - Squint/CLJS: Uses `.push` on JavaScript arrays
   - Clojure: Uses `.add` on java.util.ArrayList
-  - Returns different values per platform (array length vs boolean)
+  - Returns the mutated collection
+
+- `dict` macro: Create mutable hash tables
+  - Squint/CLJS: Creates `js/Map` with string keys (keywords converted at compile-time)
+  - Clojure: Creates `java.util.HashMap`
+
+- `gethash` macro: Get value from hash table with optional default
+  - Squint/CLJS: Uses `.get` on `js/Map`
+  - Clojure: Uses `.get` on `java.util.HashMap`
+
+## Key Differences Between Platforms
+
+### Squint vs ClojureScript
+
+1. **Macro Loading**: Squint requires all macros in one namespace
+2. **SCI Execution**: Squint uses Small Clojure Interpreter (SCI) to execute macros at compile-time
+3. **Output**: Squint produces standalone JavaScript, ClojureScript produces modules with Google Closure Compiler
+4. **REPL**: Squint has no REPL, ClojureScript has full REPL support
+
+### Platform-Specific Collections
+
+Test code uses different collection types per platform, but each collection type is mutable.
 
 ## Common Issues and Solutions
 
@@ -289,23 +367,116 @@ This project implements Common Lisp-style array manipulation:
 
 **Cause**: Source files not compiled before tests.
 
-**Solution**: `test-all.sh` now compiles all source files first. For manual runs:
-```bash
-npx squint compile src/squintcode/foo.cljc
-npx squint compile test/squintcode/foo_test.cljc
-node out/squintcode/foo_test.mjs
+**Solution**: Run `bb test-squint` which handles dependency compilation automatically.
+
+### Issue: Babashka task fails with "command not found"
+
+**Symptom**: `npx: command not found` or similar
+
+**Cause**: Node.js/npm not installed or not in PATH.
+
+**Solution**: Install Node.js and ensure `npx` is available in your PATH.
+
+### Issue: SCI parse error with syntax-quoted reader conditionals in macros
+
+**Symptom**: "EOF while reading, expected ) to match (" or similar parse errors when running Squint tests. The macros compile fine with `npx squint compile`, and CLJ/CLJS tests pass, but Squint tests fail.
+
+**Cause**: Squint's SCI (Small Clojure Interpreter) cannot parse syntax-quoted reader conditionals (`` `#?(...) ``) inside macro bodies. When SCI tries to load the macro definition for expansion, it fails to parse this pattern.
+
+**Solution**: Use reader conditionals at the `defmacro` level instead of inside the macro body:
+
+```clojure
+;; ❌ BAD - SCI cannot parse this
+(defmacro aref [arr idx]
+  `#?(:squint (aget ~arr ~idx)
+      :clj (nth ~arr ~idx)))
+
+;; ✅ GOOD - reader conditionals at defmacro level
+#?(:clj
+   (defmacro aref [arr idx]
+     `(nth ~arr ~idx))
+   :default
+   (defmacro aref [arr idx]
+     `(aget ~arr ~idx)))
 ```
+
+See **Macro Implementation Patterns** section for more details.
 
 ## File Organization
 
-- `src/squintcode/` - Source code (`.cljc` files)
-- `test/squintcode/` - Test files (`.cljc` files)
-- `out/` - Compiled output (`.mjs` for Squint, `.js` for LeetCode bundles)
-- `src/squintcode/macros.cljc` - **All macros consolidated here** for Squint compatibility
+```
+/Users/steven/development/leetcode/
+├── bb.edn                        # Babashka task configuration (primary build system)
+├── deps.edn                      # ClojureScript dependencies and REPL config
+├── squint.edn                    # Squint compiler configuration
+├── package.json                  # npm scripts (delegates to bb)
+├── run-clj-tests.clj             # Clojure test auto-discovery script
+├── src/squintcode/
+│   ├── macros.cljc               # ALL macros (consolidated for Squint)
+│   ├── fizzbuzz.cljc             # Example problem implementations
+│   ├── maxprofit.cljc
+│   └── subarray_sum_equals_k.cljc
+├── test/squintcode/
+│   ├── fizzbuzz_test.cljc        # Multi-platform tests
+│   ├── aref_test.cljc
+│   ├── push_end_test.cljc
+│   ├── setf_test.cljc
+│   ├── hash_table_test.cljc
+│   └── subarray_sum_equals_k_test.cljc
+└── out/
+    ├── squintcode/               # Intermediate .mjs files
+    └── *.js                      # Final LeetCode-ready JavaScript files
+```
 
 ## Development Workflow
 
 1. Write code in `.cljc` files with appropriate reader conditionals
 2. Add tests in `test/squintcode/`
-3. Run `./test-all-platforms.sh` to verify all platforms work
-4. For LeetCode submissions, use `npm run build:one <problem>` to generate standalone JS
+3. Run `bb test` to verify all platforms work
+4. For LeetCode submissions, use `bb build-one <problem>` to generate standalone JS
+
+## Adding New Problems
+
+1. Create `src/squintcode/<problem>.cljc` with your solution
+2. Create `test/squintcode/<problem>_test.cljc` with tests
+3. Run `bb test` to verify all platforms pass
+4. Run `bb build-one <problem>` to generate LeetCode submission file
+5. Copy `out/<problem>.js` to LeetCode
+
+## Babashka Task Dependencies
+
+Understanding the dependency graph helps when debugging or extending the build system:
+
+```
+clean
+  ├── -clean-js (removes *.js, *.bundle.js, *.mjs)
+  └── -clean-cljs-cache (removes cache dirs)
+
+test
+  ├── test-squint
+  │     ├── clean
+  │     │   ├── -clean-js
+  │     │   └── -clean-cljs-cache
+  │     ├── -compile-macros
+  │     └── -compile-squint-sources
+  │           └── -compile-macros
+  ├── test-clj (independent)
+  └── test-cljs (independent)
+
+build / build-all
+  ├── clean
+  │   ├── -clean-js
+  │   └── -clean-cljs-cache
+  └── -compile-macros
+
+build-one
+  (no explicit dependencies, compiles macros internally)
+```
+
+**Note**: Private tasks (prefixed with `-`) are hidden from `bb tasks` output but available as dependencies.
+
+## Performance Considerations
+
+- **Squint tests**: Each test is compiled and bundled independently. For large test suites, this can be slow. Consider batching related tests into single files.
+- **Parallel builds**: Currently, `build-all` runs sequentially. Could be parallelized with `:parallel true` in task dependencies if needed.
+- **Incremental compilation**: Babashka tasks don't track file changes. Use ClojureScript watch mode (`clj -M:test-watch`) for TDD workflow.

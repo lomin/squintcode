@@ -55,7 +55,7 @@
      `(let [v# (.get ^java.util.Map ~ht ~key)]
         (if (nil? v#) ~default v#)))))
 
-(defn postwalk
+(defn- postwalk
   "Depth-first post-order traversal.
    Visits children first, then applies f to the parent.
    Recursively walks sequences and vectors, applying f to each node after walking its children."
@@ -82,40 +82,36 @@
   (if initial-contents
     (if (:ns &env)
       ;; JavaScript: create array from initial contents
-      `(cljs.core/into-array ~initial-contents)
+      `(into-array ~initial-contents)
       ;; Clojure: create array from initial contents
-      `(into-array Object ~initial-contents))
+      `(java.util.ArrayList. ~initial-contents))
     (if (:ns &env)
       ;; JavaScript: create empty array of given size
       `(js/Array. ~size)
       ;; Clojure: create empty array of given size
-      `(clojure.core/make-array java.lang.Object ~size))))
+      `(java.util.ArrayList. (repeat ~size nil)))))
 
-(defmacro forv
-  "Optimized array comprehension for range expressions.
-   Pre-allocates an array and uses dotimes for efficient iteration.
+#?(:clj
+   (defmacro aref
+     "Access element at index in an array, similar to Common Lisp's aref."
+     ([] `nth)
+     ([arr idx]
+      `(nth ~arr ~idx)))
+   :default
+   (defmacro aref
+     "Access element at index in an array, similar to Common Lisp's aref."
+     ([] `nth)
+     ([arr idx]
+      `(aget ~arr ~idx))))
 
-   Usage:
-   (forv [i (range 0 5)] (* i 2))  ; returns array [0 2 4 6 8]
-
-   Note: Returns an array (not a vector) for performance."
-  [[binding range-expr] body]
-  (let [[_ start end] range-expr]  ; destructure (range start end), ignore 'range symbol
-    `(let [start# ~start
-           end# ~end
-           size# (- end# start#)
-           arr# (make-array size#)]
-       (dotimes [idx# size#]
-         (let [~binding (+ start# idx#)]
-           (aset arr# idx# ~body)))
-       arr#)))
-
-(defmacro aref
-  "Access element at index in an array, similar to Common Lisp's aref."
-  [arr idx]
-  `(do #?(:squint (aget ~arr ~idx)
-          :clj (nth ~arr ~idx)
-          :cljs (nth ~arr ~idx))))
+#?(:clj
+   (defmacro length
+     ([] `(fn [arr#] (count arr#)))
+     ([arr] `(count ~arr)))
+   :default
+   (defmacro length
+     ([] `count)
+     ([arr] `(.-length ~arr))))
 
 (comment
   (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2)
@@ -140,15 +136,19 @@
        sum))  ; returns 6"
   [arr-expr elem-var state-bindings & body]
   (let [idx (gensym "idx")
+        arr (gensym "arr")
+        len (gensym "len")
+        ;; Use nth for all platforms - it works on arrays, vectors, and lists
+        arr-access `(nth ~arr ~idx)
         replace-recur (fn [form]
                         (if (and (seq? form) (= 'recur (first form)))
                           `(recur (inc ~idx) ~@(rest form))
                           form))]
-    `(let [arr# ~arr-expr
-           len# (count arr#)]
+    `(let [~arr ~arr-expr
+           ~len (count ~arr)]
        (loop [~idx 0
               ~@state-bindings]
-         (let [~elem-var (when (< ~idx len#) (aget arr# ~idx))]
+         (let [~elem-var (when (< ~idx ~len) ~arr-access)]
            ~@(map #(postwalk replace-recur %) body))))))
 
 (defmacro push-end
@@ -166,7 +166,7 @@
   [xs val]
   (if (:ns &env)
     ;; ClojureScript or Squint - both use .push for JavaScript arrays
-    `(.push ~xs ~val)
+    `(let [xs# ~xs] (.push xs# ~val) xs#)
     ;; Clojure - use .add for Java Lists
     `(let [xs# ~xs]
        (cond-> xs#
@@ -229,31 +229,62 @@
   [& _args]
   `(println "\nTests completed successfully! ✓"))
 
-;; setf: Common Lisp-style generalized assignment
-;; Supports setting array elements: (setf (aref arr idx) val)
-;; Supports setting hash table entries: (setf (gethash ht key) val)
+(defn- -set-at [env arr idx value]
+  (if (:ns env)
+    `(aset ~arr ~idx ~value)
+    `(.set ~arr ~idx ~value)))
+
 (defmacro setf [place value]
+  "setf: Common Lisp-style generalized assignment
+   Supports setting array elements: (setf (aref arr idx) val)
+   Supports setting hash table entries: (setf (gethash ht key) val)"
   (if (seq? place)
     (let [sym (first place)
           sym-name (if (symbol? sym) (name sym) nil)]
       (cond
-        ;; Setting array element: (setf (aref arr idx) val) => (aset arr idx val)
+        ;; Setting array element
         (or (= 'aref sym) (= "aref" sym-name))
         (let [[_ arr idx] place]
-          `(aset ~arr ~idx ~value))
+          (-set-at &env arr idx value))
 
-        ;; Setting hash table entry: (setf (gethash ht key) val) => (.put ht key val) or (.set ht key val)
+        ;; Setting hash table entry
         (or (= 'gethash sym) (= "gethash" sym-name))
         (let [[_ ht key] place]
           (if (:ns &env)
             ;; JS Map .set returns the map, so we need to return the value
             ;; Normalize literal keywords to strings at compile time
-            `(do (.set ~ht ~(normalize-key key) ~value) ~value)
+            `(let [value# ~value] (.set ~ht ~(normalize-key key) value#) value#)
             ;; HashMap .put returns old value, so we need to return the new value
-            `(do (.put ^java.util.Map ~ht ~key ~value) ~value)))
+            `(let [value# ~value] (.put ^java.util.Map ~ht ~key value#) value#)))
 
         ;; Unknown place form
         :else
         `(set! ~place ~value)))
     ;; Regular variable assignment: (setf var val) => (set! var val)
     `(set! ~place ~value)))
+
+(defmacro forv
+  "Optimized array comprehension for range expressions.
+   Pre-allocates an array and uses dotimes for efficient iteration.
+
+   Usage:
+   (forv [i (range 0 5)] (* i 2))  ; returns array [0 2 4 6 8]
+
+   Note: Returns an array (not a vector) for performance."
+  [[binding range-expr] body]
+  (let [[_ start end] range-expr  ; destructure (range start end), ignore 'range symbol
+        arr-sym (gensym)
+        idx-sym (gensym)]
+    `(let [start# ~start
+           end# ~end
+           size# (- end# start#)
+           ~arr-sym (make-array size#)]
+       (dotimes [~idx-sym size#]
+         (let [~binding (+ start# ~idx-sym)]
+           ~(-set-at &env arr-sym idx-sym body)))
+       ~arr-sym)))
+
+
+(comment
+  (macroexpand '(forv [i (range 1 5)] i))
+  (forv [i (range 1 5)] i))

@@ -4,11 +4,6 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "./test-all.sh",
-    "test:one": "./test-one.sh",
-    "build": "npm run clean && ./build-all.sh",
-    "build:one": "./build-one.sh",
-    "clean": "rm -rf out/"
   },
   "keywords": [],
   "author": "",

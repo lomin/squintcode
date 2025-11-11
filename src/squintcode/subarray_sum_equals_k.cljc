@@ -1,4 +1,5 @@
 (ns squintcode.subarray-sum-equals-k
+  #?(:squint (:require-macros [squintcode.macros :refer [aloop dict gethash setf]]))
   #?(:cljs (:require-macros [squintcode.macros :refer [aloop dict gethash setf]]))
   #?(:clj  (:require [squintcode.macros :refer [aloop dict gethash setf]])))
 
@@ -7,7 +8,7 @@
     (do (setf (gethash m k) (inc v)) m)
     (do (setf (gethash m k) default) m)))
 
-(defn get-matching-subarrays-count [sum-freq running-sum' k]
+(defn count-matching-subarrays [sum-freq running-sum' k]
   (gethash sum-freq (- running-sum' k) 0))
 
 (defn subarraySum [num-seq k]
@@ -18,13 +19,14 @@
          (if num
            (let [running-sum' (+ running-sum num) ]
              (recur running-sum'
-                    (+ result (get-matching-subarrays-count prefix-sum-frequencies running-sum' k))
+                    (+ result (count-matching-subarrays prefix-sum-frequencies running-sum' k))
                     (incf prefix-sum-frequencies running-sum' 1)))
            result)))
 
 (comment
-(subarraySum [1,-1,1] 2)
-  (subarraySum [1,-1,1,1] 0))
+  (subarraySum (into-array  [1,-1,1]) 2)
+  (subarraySum (into-array [1,-1,1,1]) 0)
+  )
 
 
 (comment

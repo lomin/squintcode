@@ -1,0 +1,266 @@
+{:paths ["src" "test"]
+
+ :tasks
+ {:requires ([babashka.fs :as fs]
+             [babashka.process :refer [shell process]]
+             [clojure.string :as str])
+
+  :init (def project-root (fs/cwd))
+
+  ;; ============================================================================
+  ;; CLEAN TASKS
+  ;; ============================================================================
+
+  -clean-js
+  {:doc "Remove JavaScript build artifacts"
+   :task (do
+           (println "Cleaning JavaScript artifacts...")
+           (doseq [pattern ["out/*.js" "out/*.bundle.js" "out/squintcode/*.mjs"]]
+             (doseq [f (fs/glob "." pattern)]
+               (fs/delete f)))
+           (println "✓ JavaScript artifacts cleaned"))}
+
+  -clean-cljs-cache
+  {:doc "Remove ClojureScript cache directories"
+   :task (do
+           (println "Cleaning ClojureScript cache...")
+           (doseq [dir ["cljs-test-runner-out" ".cljs_node_repl" ".cljsbuild" ".shadow-cljs"]]
+             (when (fs/exists? dir)
+               (fs/delete-tree dir)))
+           (println "✓ ClojureScript cache cleaned"))}
+
+  clean
+  {:doc "Clean all build artifacts and caches"
+   :depends [-clean-js -clean-cljs-cache]
+   :task (println "\n✓ All clean tasks completed")}
+
+  ;; ============================================================================
+  ;; COMPILATION TASKS
+  ;; ============================================================================
+
+  -compile-macros
+  {:doc "Compile macros.cljc (required dependency for all Squint code)"
+   :task (do
+           (println "Compiling macros.cljc...")
+           (let [result (shell {:continue true} "npx squint compile src/squintcode/macros.cljc")]
+             (when-not (zero? (:exit result))
+               (println "ERROR: Failed to compile macros.cljc")
+               (System/exit 1)))
+           (println "✓ Macros compiled"))}
+
+  -compile-squint-sources
+  {:doc "Compile all Squint source files (excluding macros and tests)"
+   :depends [-compile-macros]
+   :task (do
+           (println "Compiling Squint source files...")
+           (let [sources (filter (fn [f] (and (not (str/includes? (str f) "macros.cljc"))
+                                              (not (str/includes? (str f) "_test.cljc"))))
+                                 (fs/glob "src/squintcode" "*.cljc"))]
+             (doseq [src sources]
+               (let [name (fs/file-name src)]
+                 (println (str "  Compiling " name "..."))
+                 (shell {:continue true} (str "npx squint compile " src)))))
+           (println "✓ Source files compiled"))}
+
+  ;; ============================================================================
+  ;; TEST TASKS
+  ;; ============================================================================
+
+  test-squint
+  {:doc "Run Squint tests (LeetCode-identical environment)"
+   :depends [clean -compile-macros -compile-squint-sources]
+   :task (do
+           (println "\n" (str (apply str (repeat 60 "="))))
+           (println "RUNNING SQUINT TESTS")
+           (println (str (apply str (repeat 60 "="))))
+
+           ;; Compile all test files
+           (let [test-files (fs/glob "test/squintcode" "*_test.cljc")
+                 failed (atom false)]
+
+             (doseq [test-file test-files]
+               (let [test-name (fs/file-name test-file)
+                     test-ns (-> test-name
+                                 (str/replace "_test.cljc" "")
+                                 (str/replace "_" "-"))
+                     source-file (fs/file (str "src/squintcode/" test-ns ".cljc"))
+                     mjs-test (str "out/squintcode/" (str/replace test-name ".cljc" ".mjs"))
+                     bundle-file (str "out/" (str/replace test-name ".cljc" ".bundle.js"))
+                     final-file (str "out/" (str/replace test-name ".cljc" ".js"))]
+
+                 (println (str "\n▸ " test-name))
+
+                 ;; Compile source file if it exists
+                 (when (fs/exists? source-file)
+                   (shell {:continue true} (str "npx squint compile " source-file)))
+
+                 ;; Compile test file
+                 (let [compile-result (shell {:continue true :out :string :err :string}
+                                             (str "npx squint compile " test-file))]
+                   (when-not (zero? (:exit compile-result))
+                     (println "  ✗ Compilation failed")
+                     (println (:err compile-result))
+                     (reset! failed true)
+                     (System/exit 1)))
+
+                 ;; Bundle test with esbuild
+                 (let [bundle-result (shell {:continue true :out :string :err :string}
+                                            (str "npx esbuild " mjs-test
+                                                 " --outfile=" bundle-file
+                                                 " --format=iife --bundle --tree-shaking=true --platform=node"))]
+                   (when-not (zero? (:exit bundle-result))
+                     (println "  ✗ Bundling failed")
+                     (println (:err bundle-result))
+                     (reset! failed true)
+                     (System/exit 1)))
+
+                 ;; Remove export statements (only at end of file)
+                 (let [bundle-content (slurp bundle-file)
+                       ;; Use regex to remove export block at end of file
+                       clean-content (str/replace bundle-content
+                                                   (re-pattern "(?s)\\nexport \\{[^}]*\\};?\\s*$")
+                                                   "")]
+                   (spit final-file clean-content))
+
+                 ;; Delete bundle file
+                 (fs/delete bundle-file)
+
+                 ;; Run test
+                 (let [test-result (shell {:continue true} (str "node " final-file))]
+                   (when-not (zero? (:exit test-result))
+                     (println "  ✗ Test failed")
+                     (reset! failed true)
+                     (System/exit 1)))))
+
+             (if (deref failed)
+               (do
+                 (println "\n✗ Squint tests FAILED")
+                 (System/exit 1))
+               (println "\n✓ All Squint tests PASSED"))))}
+
+  test-clj
+  {:doc "Run Clojure (JVM) tests"
+   :task (do
+           (println "\n" (str (apply str (repeat 60 "="))))
+           (println "RUNNING CLOJURE TESTS")
+           (println (str (apply str (repeat 60 "="))))
+           (let [result (shell {:continue true} "clojure -M run-clj-tests.clj")]
+             (when-not (zero? (:exit result))
+               (println "\n✗ Clojure tests FAILED")
+               (System/exit 1))
+             (println "\n✓ All Clojure tests PASSED")))}
+
+  test-cljs
+  {:doc "Run ClojureScript tests"
+   :task (do
+           (println "\n" (str (apply str (repeat 60 "="))))
+           (println "RUNNING CLOJURESCRIPT TESTS")
+           (println (str (apply str (repeat 60 "="))))
+           (let [result (shell {:continue true} "clj -M:test")]
+             (when-not (zero? (:exit result))
+               (println "\n✗ ClojureScript tests FAILED")
+               (System/exit 1))
+             (println "\n✓ All ClojureScript tests PASSED")))}
+
+  test
+  {:doc "Run all tests (Squint → Clojure → ClojureScript)"
+   :depends [test-squint test-clj test-cljs]
+   :task (do
+           (println "\n" (str (apply str (repeat 60 "="))))
+           (println "✓ ALL TESTS PASSED ON ALL PLATFORMS")
+           (println (str (apply str (repeat 60 "=")))))}
+
+  ;; ============================================================================
+  ;; BUILD TASKS (for LeetCode)
+  ;; ============================================================================
+
+  build-one
+  {:doc "Build a single problem for LeetCode submission"
+   :task (let [problem (first *command-line-args*)]
+           (when-not problem
+             (println "ERROR: Problem name required")
+             (println "Usage: bb build-one <problem-name>")
+             (println "Example: bb build-one fizzbuzz")
+             (System/exit 1))
+
+           (println (str "Building " problem "..."))
+
+           ;; Find source file
+           (let [src-cljs (fs/file (str "src/squintcode/" problem ".cljs"))
+                 src-cljc (fs/file (str "src/squintcode/" problem ".cljc"))
+                 src-file (cond
+                            (fs/exists? src-cljs) src-cljs
+                            (fs/exists? src-cljc) src-cljc
+                            :else nil)]
+
+             (when-not src-file
+               (println (str "ERROR: Source file not found: src/squintcode/" problem ".cljs or .cljc"))
+               (System/exit 1))
+
+             ;; Compile macros first
+             (println "Compiling macros.cljc...")
+             (shell "npx squint compile src/squintcode/macros.cljc")
+
+             ;; Compile source
+             (println "Compiling Squint to JavaScript...")
+             (shell (str "npx squint compile " src-file))
+
+             (let [mjs-file (str "out/squintcode/" problem ".mjs")
+                   bundle-file (str "out/" problem ".bundle.js")
+                   output-file (str "out/" problem ".js")]
+
+               (when-not (fs/exists? mjs-file)
+                 (println (str "ERROR: Compilation failed, " mjs-file " not found"))
+                 (System/exit 1))
+
+               ;; Bundle with esbuild
+               (println "Bundling with esbuild...")
+               (shell (str "npx esbuild " mjs-file
+                           " --outfile=" bundle-file
+                           " --format=iife --bundle --tree-shaking=true"))
+
+               ;; Remove export statements (only at end of file)
+               (println "Removing export statements...")
+               (let [bundle-content (slurp bundle-file)
+                     ;; Use regex to remove export block at end of file
+                     clean-content (str/replace bundle-content
+                                                 (re-pattern "(?s)\\nexport \\{[^}]*\\};?\\s*$")
+                                                 "")]
+                 (spit output-file clean-content))
+
+               ;; Clean up bundle file
+               (fs/delete bundle-file)
+
+               (println (str "Done! Output file: " output-file))
+               (println (str "File size: " (fs/size output-file) " bytes")))))}
+
+  build-all
+  {:doc "Build all problems for LeetCode"
+   :depends [clean -compile-macros]
+   :task (do
+           (println "Building all LeetCode problems...")
+           (println)
+
+           ;; Find all source files (excluding macros)
+           (let [sources (filter (fn [f] (not (str/includes? (str f) "macros.cljc")))
+                                 (concat (fs/glob "src/squintcode" "*.cljs")
+                                         (fs/glob "src/squintcode" "*.cljc")))]
+
+             (doseq [src-file sources]
+               (let [problem (-> (fs/file-name src-file)
+                                 (str/replace ".cljs" "")
+                                 (str/replace ".cljc" ""))]
+                 (println (str (apply str (repeat 40 "="))))
+                 (shell (str "bb build-one " problem))
+                 (println)))
+
+             (println (str (apply str (repeat 40 "="))))
+             (println "All builds complete!")
+             (println)
+             (println "Output files:")
+             (doseq [js-file (fs/glob "out" "*.js")]
+               (println (str "  " (fs/file-name js-file) " (" (fs/size js-file) " bytes)")))))}
+
+  build
+  {:doc "Alias for build-all"
+   :depends [build-all]}}}
