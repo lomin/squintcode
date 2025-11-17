@@ -1,6 +1,24 @@
 (ns squintcode.macros
   (:refer-clojure :exclude [make-array]))
 
+;; Extend IIndexed protocol for Uint32Array in ClojureScript
+;; This allows (nth typed-array index) to work
+#?(:squint (comment "nothing to do")
+   :cljs
+   (do
+     (extend-type js/Uint32Array
+       IIndexed
+       (-nth
+         ([coll n]
+          (aget coll n))
+         ([coll n not-found]
+          (if (and (>= n 0) (< n (.-length coll)))
+            (aget coll n)
+            not-found)))
+       ICounted
+       (-count [coll]
+         (.-length coll)))))
+
 (defn- normalize-key
   "Convert keywords to strings at compile time for JS Map compatibility.
    - Keywords -> strings (e.g., :a -> \"a\")
@@ -72,24 +90,70 @@
     (f walked)))
 
 (defmacro make-array
-  "Create an array, optionally with initial contents.
+  "Create an array, optionally with initial contents or element type.
 
    Usage:
    (make-array 5)                                    ; array of size 5
    (make-array 5 :initial-contents [1 2 3 4 5])     ; array with initial values
-   (make-array 5 :initial-contents '(1 2 3 4 5))    ; also works with lists"
-  [size & {:keys [initial-contents]}]
-  (if initial-contents
-    (if (:ns &env)
-      ;; JavaScript: create array from initial contents
-      `(into-array ~initial-contents)
-      ;; Clojure: create array from initial contents
-      `(java.util.ArrayList. ~initial-contents))
-    (if (:ns &env)
-      ;; JavaScript: create empty array of given size
-      `(js/Array. ~size)
-      ;; Clojure: create empty array of given size
-      `(java.util.ArrayList. (repeat ~size nil)))))
+   (make-array 5 :initial-contents '(1 2 3 4 5))    ; also works with lists
+   (make-array 5 :initial-element 0)                ; array filled with 0s
+   (make-array 5 :element-type 'integer)            ; typed integer array (Uint32Array in JS)
+   (make-array 5 :element-type 't)                  ; generic array (default)
+   (make-array 5 :element-type 'integer :initial-element 42) ; typed array with initial value
+
+   Options:
+   - :initial-contents - sequence of initial values (mutually exclusive with :initial-element)
+   - :initial-element  - single value to fill array (mutually exclusive with :initial-contents)
+   - :element-type     - 'integer for typed arrays (JS: Uint32Array, CLJ: ArrayList),
+                         't or nil for generic arrays (default)"
+  [size & {:keys [initial-contents initial-element element-type]}]
+  ;; Validate mutually exclusive options
+  (when (and initial-contents initial-element)
+    (throw (ex-info ":initial-contents and :initial-element are mutually exclusive"
+                    {:initial-contents initial-contents
+                     :initial-element initial-element})))
+
+  (let [is-integer-type? (= element-type ''integer)
+        is-js? (:ns &env)]
+
+    (cond
+      ;; Case 1: initial-contents provided
+      initial-contents
+      (if is-js?
+        (if is-integer-type?
+          ;; JS typed array from contents
+          `(js/Uint32Array.from ~initial-contents)
+          ;; JS regular array from contents
+          `(into-array ~initial-contents))
+        ;; Clojure: always use ArrayList
+        `(java.util.ArrayList. ~initial-contents))
+
+      ;; Case 2: initial-element provided
+      initial-element
+      (if is-js?
+        (if is-integer-type?
+          ;; JS typed array filled with initial-element
+          `(let [arr# (js/Uint32Array. ~size)]
+             (.fill arr# ~initial-element)
+             arr#)
+          ;; JS regular array filled with initial-element
+          `(let [arr# (js/Array. ~size)]
+             (.fill arr# ~initial-element)
+             arr#))
+        ;; Clojure: ArrayList filled with initial-element
+        ;; Use repeatedly to create independent instances for mutable values
+        `(java.util.ArrayList. (repeatedly ~size (fn [] ~initial-element))))
+
+      ;; Case 3: no initial data, just size and optional element-type
+      :else
+      (if is-js?
+        (if is-integer-type?
+          ;; JS typed array (initialized to 0s by default)
+          `(js/Uint32Array. ~size)
+          ;; JS regular array (empty slots)
+          `(js/Array. ~size))
+        ;; Clojure: ArrayList filled with nils
+        `(java.util.ArrayList. (repeat ~size nil))))))
 
 #?(:clj
    (defmacro aref
@@ -138,8 +202,6 @@
   (let [idx (gensym "idx")
         arr (gensym "arr")
         len (gensym "len")
-        ;; Use nth for all platforms - it works on arrays, vectors, and lists
-        arr-access `(nth ~arr ~idx)
         replace-recur (fn [form]
                         (if (and (seq? form) (= 'recur (first form)))
                           `(recur (inc ~idx) ~@(rest form))
@@ -148,7 +210,7 @@
            ~len (count ~arr)]
        (loop [~idx 0
               ~@state-bindings]
-         (let [~elem-var (when (< ~idx ~len) ~arr-access)]
+         (let [~elem-var (when (< ~idx ~len) (aref ~arr ~idx))]
            ~@(map #(postwalk replace-recur %) body))))))
 
 (defmacro push-end

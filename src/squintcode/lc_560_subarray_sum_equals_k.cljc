@@ -1,4 +1,4 @@
-(ns squintcode.subarray-sum-equals-k
+(ns squintcode.lc-560-subarray-sum-equals-k
   #?(:cljs (:require-macros [squintcode.macros  :as cl]))
   #?(:clj  (:require [squintcode.macros :as cl])))
 

@@ -51,33 +51,34 @@ bb test-cljs         # ClojureScript tests only
 
 ```bash
 bb build             # Build all problems
-bb build-one <name>  # Build single problem (e.g., bb build-one twosum)
+bb build-one <name>  # Build single problem (e.g., bb build-one fizzbuzz)
 bb clean             # Clean all build artifacts
-```
-
-### npm Shortcuts
-
-All `bb` commands are also available via npm:
-
-```bash
-npm test             # Same as bb test
-npm run build        # Same as bb build
-npm run build:one    # Same as bb build-one
 ```
 
 ## Development Workflow
 
-### Option 1: Test-Driven Development (Recommended)
+### Test-Driven Development (Recommended)
 
 ```bash
-# Terminal 1: Watch and run ClojureScript tests
+# Terminal 1: Watch and run ClojureScript tests (if configured)
 clj -M:test-watch
 
 # Terminal 2: Edit code in your favorite editor
 # Tests re-run automatically on save
 ```
 
-### Option 2: REPL-Driven Development
+Or simply run tests after each change:
+
+```bash
+# Run all tests (fastest feedback)
+bb test
+
+# Or run just one platform during development
+bb test-cljs        # Interactive development
+bb test-squint      # LeetCode-identical environment
+```
+
+### REPL-Driven Development
 
 ```bash
 # Start ClojureScript REPL
@@ -100,7 +101,7 @@ Then in the REPL:
 (run-tests 'squintcode.fizzbuzz-test)
 ```
 
-### Option 3: Calva (VSCode)
+### IDE Integration (Calva for VSCode)
 
 1. Open project in VSCode with [Calva](https://calva.io/) installed
 2. Press `Ctrl+Alt+C Ctrl+Alt+J` (Mac: `Cmd+Option+C Cmd+Option+J`)
@@ -116,12 +117,18 @@ Then in the REPL:
 ├── squint.edn                # Squint compiler config
 ├── package.json              # npm scripts
 ├── src/squintcode/
-│   ├── macros.cljc           # All macros (Common Lisp-style)
-│   ├── fizzbuzz.cljc         # Example solutions
-│   └── *.cljc                # Your solutions here
+│   ├── macros.cljc                           # All macros (Common Lisp-style)
+│   ├── fizzbuzz.cljc                         # Example: FizzBuzz
+│   ├── maxprofit.cljc                        # Example: Max Profit
+│   ├── lc_560_subarray_sum_equals_k.cljc     # LeetCode 560
+│   ├── lc_930_binary_subarrays_with_sum.cljc # LeetCode 930
+│   └── *.cljc                                # Your solutions here
 ├── test/squintcode/
-│   └── *_test.cljc           # Multi-platform tests
+│   ├── *_test.cljc                           # Multi-platform tests
+│   ├── lc_560_subarray_sum_equals_k_test.cljc
+│   └── lc_930_binary_subarrays_with_sum_test.cljc
 └── out/
+    ├── squintcode/*.mjs      # Intermediate ES modules
     └── *.js                  # LeetCode-ready JavaScript files
 ```
 
@@ -131,11 +138,12 @@ Then in the REPL:
 
 ```clojure
 (ns squintcode.twosum
-  #?(:cljs (:require-macros [squintcode.macros :refer [aref]]))
-  #?(:clj  (:require [squintcode.macros :refer [aref]])))
+  #?(:clj (:require [squintcode.macros :as cl]))
+  #?(:squint (:require-macros [squintcode.macros :as cl]))
+  #?(:cljs (:require-macros [squintcode.macros :as cl])))
 
 (defn twoSum [nums target]
-  ;; Your solution here
+  ;; Your solution here using cl/aref, cl/make-array, etc.
   )
 ```
 
@@ -144,14 +152,18 @@ Then in the REPL:
 ```clojure
 (ns squintcode.twosum-test
   (:require #?@(:squint []
-                :clj [[clojure.test :refer [deftest is testing]]]
-                :cljs [[cljs.test :refer-macros [deftest is testing]]])
+                :clj [[clojure.test :refer [deftest is testing run-tests]]]
+                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]])
+            #?(:squint ["assert" :as assert])
             [squintcode.twosum :refer [twoSum]])
-  #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing]])))
+  #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing run-tests]])))
 
 (deftest twosum-test
   (testing "Basic case"
     (is (= [0 1] (twoSum [2 7 11 15] 9)))))
+
+;; Run tests (required for Squint)
+#?(:squint (run-tests))
 ```
 
 3. **Run tests**:
@@ -177,17 +189,17 @@ This project provides familiar Common Lisp operations:
 
 ```clojure
 ;; Create array
-(make-array 5)                                  ; empty array of size 5
-(make-array 5 :initial-contents [1 2 3 4 5])   ; with initial values
+(cl/make-array 5)                                  ; empty array of size 5
+(cl/make-array 5 :initial-contents [1 2 3 4 5])   ; with initial values
 
 ;; Read element
 (cl/aref arr 2)  ; get element at index 2
 
 ;; Modify element
-(setf (cl/aref arr 2) 99)  ; set element at index 2 to 99
+(cl/setf (cl/aref arr 2) 99)  ; set element at index 2 to 99
 
-;; Iterate over array
-(aloop arr elem [sum 0]
+;; Iterate over array (using macros from squintcode.macros)
+(cl/aloop arr elem [sum 0]
   (if elem
     (recur (+ sum elem))
     sum))
@@ -197,24 +209,24 @@ This project provides familiar Common Lisp operations:
 
 ```clojure
 ;; Create hash table
-(dict :a 1 :b 2 :c 3)
+(cl/dict :a 1 :b 2 :c 3)
 
 ;; Get value
-(gethash ht :a)         ; returns value or nil
-(gethash ht :x 0)       ; returns value or default (0)
+(cl/gethash ht :a)         ; returns value or nil
+(cl/gethash ht :x 0)       ; returns value or default (0)
 
 ;; Set value
-(setf (gethash ht :d) 4)
+(cl/setf (cl/gethash ht :d) 4)
 ```
 
 ### Other Operations
 
 ```clojure
 ;; Append to array (mutates in place)
-(push-end arr 42)
+(cl/push-end arr 42)
 
 ;; Array comprehension
-(forv [i (range 0 10)] (* i 2))  ; => [0 2 4 6 8 10 12 14 16 18]
+(cl/forv [i (range 0 10)] (* i 2))  ; => [0 2 4 6 8 10 12 14 16 18]
 ```
 
 ## Multi-Platform Testing
@@ -232,15 +244,15 @@ Each platform uses different underlying data structures but the same test code w
 - **Fast startup** - Tasks execute nearly instantly
 - **Single source of truth** - All build logic in `bb.edn`
 - **Cross-platform** - Works on Linux, macOS, Windows
-- **DRY** - npm scripts simply delegate to `bb` tasks
 - **Composable** - Task dependencies ensure correct execution order
+- **Simple** - Direct task invocation without npm wrapper overhead
 
 ## Tips
 
-- **Use watch mode** during development: `clj -M:test-watch`
-- **Test before building**: `bb test` catches errors early
+- **Test before building**: `bb test` catches errors early across all platforms
+- **Use Squint tests**: They run in the same environment as LeetCode (Node.js)
 - **Check file sizes**: Large builds may timeout on LeetCode
-- **Profile with Squint tests**: They run in the same environment as LeetCode
+- **Watch mode**: Use `clj -M:test-watch` if configured for rapid development feedback
 
 ## Troubleshooting
 

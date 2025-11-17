@@ -1,8 +1,8 @@
-(ns squintcode.subarray-sum-equals-k-test
+(ns squintcode.lc-560-subarray-sum-equals-k-test
   (:require #?@(:squint []
                 :clj [[clojure.test :refer [deftest is testing run-tests]]]
                 :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]])
-            [squintcode.subarray-sum-equals-k :refer [subarraySum]]
+            [squintcode.lc-560-subarray-sum-equals-k :refer [subarraySum]]
             #?(:squint ["assert" :as assert]))
   #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing run-tests]])))
 
