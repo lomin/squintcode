@@ -13,14 +13,16 @@
     (let [outer-collection [(cl/make-array 1 :initial-contents [11])
                             (cl/make-array 3 :initial-contents [21 22 23])]
           ;; Outer aloop iterates over 2 rows; (cl/length ::aloop) here = 2
-          inner-lengths (cl/aloop outer-collection row
+          inner-lengths (cl/aloop outer-collection
                           [result (cl/make-array (cl/length ::aloop))  ; uses outer length (2)
                            idx 0]
-                          (if row
-                            ;; Inner aloop iterates over each row's elements
-                            ;; (cl/length ::aloop) here should be row's length (1 or 3), NOT 2
-                            (let [this-row-length (cl/aloop row _elem [len (cl/length ::aloop)]
-                                                    (if _elem
+                          (if it
+                            ;; Capture outer 'it' before inner aloop shadows it
+                            (let [row it
+                                  ;; Inner aloop iterates over each row's elements
+                                  ;; (cl/length ::aloop) here should be row's length (1 or 3), NOT 2
+                                  this-row-length (cl/aloop row [len (cl/length ::aloop)]
+                                                    (if it
                                                       (recur len)
                                                       len))]
                               (cl/setf (cl/aref result idx) this-row-length)

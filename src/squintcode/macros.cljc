@@ -223,16 +223,17 @@
   (map (partial prewalk (reduce comp (map partial [-stop-at-aloop -replace-aloop-len -replace-recur] (repeat ctx)))) body))
 
 (defmacro aloop
-  "Optimized array iteration with O(1) access and implicit index management.
+  "Anaphoric array iteration with O(1) access and implicit index management.
+   Binds current element to the special variable `it`.
 
    Usage:
-   (aloop arr elem [state-var1 init1 ...] body)
-   (aloop (range n) elem [state-var1 init1 ...] body)
-   (aloop (range start end) elem [state-var1 init1 ...] body)
-   (aloop (range start end step) elem [state-var1 init1 ...] body)
+   (aloop arr [state-var1 init1 ...] body)
+   (aloop (range n) [state-var1 init1 ...] body)
+   (aloop (range start end) [state-var1 init1 ...] body)
+   (aloop (range start end step) [state-var1 init1 ...] body)
 
    The macro provides:
-   - elem-var: bound to current array element (or index for range) (nil when past end)
+   - it: bound to current array element (or index for range) (nil when past end)
    - state-bindings: additional loop state variables
    - (recur ...): implicitly increments the index
    - (length ::aloop): access the length within the loop body
@@ -240,16 +241,21 @@
    For range expressions, no collection is allocated - generates direct numeric loop.
 
    Example:
-   (aloop (make-array 3 :initial-contents [1 2 3]) x [sum 0]
-     (if x
-       (recur (+ sum x))
+   (aloop (make-array 3 :initial-contents [1 2 3]) [sum 0]
+     (if it
+       (recur (+ sum it))
        sum))  ; returns 6
 
-   (aloop (range 1 5) x [sum 0]
-     (if x
-       (recur (+ sum x))
-       sum))  ; returns 10 (1+2+3+4)"
-  [arr-expr elem-var state-bindings & body]
+   (aloop (range 1 5) [sum 0]
+     (if it
+       (recur (+ sum it))
+       sum))  ; returns 10 (1+2+3+4)
+
+   For nested loops, capture outer `it` before shadowing:
+   (aloop outer-coll [...]
+     (let [outer it]
+       (aloop outer [...] ...it...)))"
+  [arr-expr state-bindings & body]
   (if-let [{:keys [start end step]} (parse-range-expr arr-expr)]
     ;; Range optimization path - no collection allocation
     (let [idx (gensym "idx")
@@ -263,18 +269,18 @@
              ~len-sym (quot (+ (- ~end-sym start#) (dec ~step-sym)) ~step-sym)]
          (loop [~idx start#
                 ~@(-transform-aloop ctx state-bindings)]
-           (let [~elem-var (when (< ~idx ~end-sym) ~idx)]
+           (let [~'it (when (< ~idx ~end-sym) ~idx)]
              ~@(-transform-aloop ctx body)))))
     ;; Regular array path (existing behavior)
     (let [idx (gensym "idx")
           arr (gensym "arr")
           len (gensym "len")
-          ctx {:idx idx :arr arr :it elem-var :len len}]
+          ctx {:idx idx :arr arr :it 'it :len len}]
       `(let [~arr ~arr-expr
              ~len (count ~arr)]
          (loop [~idx 0
                 ~@(-transform-aloop ctx state-bindings)]
-           (let [~elem-var (when (< ~idx ~len) (aref ~arr ~idx))]
+           (let [~'it (when (< ~idx ~len) (aref ~arr ~idx))]
              ~@(-transform-aloop ctx body)))))))
 
 (defmacro push-end
@@ -412,10 +418,10 @@
 
 
 (comment
-  ;; Range optimization examples
-  (macroexpand '(aloop (range 5) a [x (length ::aloop)] (if a (recur x) x)))
-  (macroexpand '(aloop (range 3 7) e [sum 0] (if e (recur (+ sum e)) sum)))
-  (macroexpand '(aloop (range 0 10 2) e [sum 0] (if e (recur (+ sum e)) sum)))
+  ;; Anaphoric aloop examples (binds to 'it')
+  (macroexpand '(aloop (range 5) [x (length ::aloop)] (if it (recur x) x)))
+  (macroexpand '(aloop (range 3 7) [sum 0] (if it (recur (+ sum it)) sum)))
+  (macroexpand '(aloop (range 0 10 2) [sum 0] (if it (recur (+ sum it)) sum)))
 
   ;; forv examples
   (macroexpand '(forv [i (range 1 5)] i))

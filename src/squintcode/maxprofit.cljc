@@ -7,12 +7,12 @@
      :cljs js/Infinity))
 
 (defn maxProfit [prices]
-  (cl/aloop prices p
+  (cl/aloop prices
             [min-price (infinity)
              max-profit 0]
-            (if p
-              (recur (min min-price p)
-                     (max max-profit (- p min-price)))
+            (if it
+              (recur (min min-price it)
+                     (max max-profit (- it min-price)))
               max-profit)))
 
 

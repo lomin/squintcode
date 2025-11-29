@@ -11,12 +11,12 @@
   (cl/gethash sum-freq (- running-sum' k) 0))
 
 (defn subarraySum [num-seq k]
-  (cl/aloop num-seq num
+  (cl/aloop num-seq
             [running-sum 0
              result 0
              prefix-sum-frequencies (cl/dict 0 1)]
-            (if num
-              (let [running-sum' (+ running-sum num)]
+            (if it
+              (let [running-sum' (+ running-sum it)]
                 (recur running-sum'
                        (+ result (count-matching-subarrays prefix-sum-frequencies running-sum' k))
                        (incf prefix-sum-frequencies running-sum' 1)))

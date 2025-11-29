@@ -2,15 +2,15 @@
   (:require [clj-kondo.hooks-api :as api]))
 
 (defn aloop [{:keys [node]}]
-  (let [[_ arr-expr elem-var state-bindings & body] (:children node)]
-    ;; Transform (aloop arr elem [bindings] body)
-    ;; into (let [elem (nth arr 0 nil)] (loop [bindings] body))
-    ;; elem gets first element type from array for type checking
-    (when (and elem-var (api/vector-node? state-bindings))
+  (let [[_ arr-expr state-bindings & body] (:children node)]
+    ;; Transform (aloop arr [bindings] body)
+    ;; into (let [it (nth arr 0 nil)] (loop [bindings] body))
+    ;; Anaphoric macro: always binds to 'it'
+    (when (api/vector-node? state-bindings)
       {:node (api/list-node
               [(api/token-node 'let)
                (api/vector-node
-                [elem-var
+                [(api/token-node 'it)
                  (api/list-node
                   [(api/token-node 'nth)
                    arr-expr

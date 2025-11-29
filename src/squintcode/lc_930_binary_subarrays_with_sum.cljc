@@ -27,12 +27,12 @@
  * @return {number}
  */"
 (defn numSubarraysWithSum [nums goal]
-  (cl/aloop nums num
+  (cl/aloop nums
             [running-sum 0
              result 0
              prefix-sum-frequencies (init-prefix-sum-frequencies (cl/length ::aloop))]
-            (if num
-              (let [running-sum' (+ running-sum num)]
+            (if it
+              (let [running-sum' (+ running-sum it)]
                 (recur running-sum'
                        (+ result (count-matching-subarrays prefix-sum-frequencies running-sum' goal))
                        (incf-array prefix-sum-frequencies running-sum')))
