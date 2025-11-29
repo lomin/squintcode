@@ -183,15 +183,31 @@
 (defmacro aloop-length [xs]
   (throw (ex-info "must be called within an aloop" {})))
 
-(defn- -replace-recur [{idx :idx} form]
+(defn- -replace-recur [{:keys [idx step]} form]
   (if (and (seq? form) (= 'recur (first form)))
-    `(recur (inc ~idx) ~@(rest form))
+    (if (or (nil? step) (= step 1))
+      `(recur (inc ~idx) ~@(rest form))
+      `(recur (+ ~idx ~step) ~@(rest form)))
     form))
 
 (defn- name-or-string [x]
   (if (or (symbol? x) (keyword? x))
     (name x)
     (str x)))
+
+(defn- parse-range-expr
+  "Returns {:start _ :end _ :step _} if expr is (range ...), nil otherwise.
+   Supports:
+   - (range n)           -> {:start 0 :end n :step 1}
+   - (range start end)   -> {:start start :end end :step 1}
+   - (range start end step) -> {:start start :end end :step step}"
+  [expr]
+  (when (and (seq? expr) (= 'range (first expr)))
+    (case (count (rest expr))
+      1 {:start 0 :end (second expr) :step 1}
+      2 {:start (second expr) :end (nth expr 2) :step 1}
+      3 {:start (second expr) :end (nth expr 2) :step (nth expr 3)}
+      nil)))
 
 (defn- -replace-aloop-len [{len :len} form]
   (if (and (seq? form) (= (map name-or-string form) (list "length" "aloop")))
@@ -211,28 +227,55 @@
 
    Usage:
    (aloop arr elem [state-var1 init1 ...] body)
+   (aloop (range n) elem [state-var1 init1 ...] body)
+   (aloop (range start end) elem [state-var1 init1 ...] body)
+   (aloop (range start end step) elem [state-var1 init1 ...] body)
 
    The macro provides:
-   - elem-var: bound to current array element (or nil when past end)
+   - elem-var: bound to current array element (or index for range) (nil when past end)
    - state-bindings: additional loop state variables
    - (recur ...): implicitly increments the index
+   - (length ::aloop): access the length within the loop body
+
+   For range expressions, no collection is allocated - generates direct numeric loop.
 
    Example:
    (aloop (make-array 3 :initial-contents [1 2 3]) x [sum 0]
      (if x
        (recur (+ sum x))
-       sum))  ; returns 6"
+       sum))  ; returns 6
+
+   (aloop (range 1 5) x [sum 0]
+     (if x
+       (recur (+ sum x))
+       sum))  ; returns 10 (1+2+3+4)"
   [arr-expr elem-var state-bindings & body]
-  (let [idx (gensym "idx")
-        arr (gensym "arr")
-        len (gensym "len")
-        ctx {:idx idx :arr arr :it elem-var :len len}]
-    `(let [~arr ~arr-expr
-           ~len (count ~arr)]
-       (loop [~idx 0
-              ~@(-transform-aloop ctx state-bindings)]
-         (let [~elem-var (when (< ~idx ~len) (aref ~arr ~idx))]
-           ~@(-transform-aloop ctx body))))))
+  (if-let [{:keys [start end step]} (parse-range-expr arr-expr)]
+    ;; Range optimization path - no collection allocation
+    (let [idx (gensym "idx")
+          end-sym (gensym "end")
+          step-sym (gensym "step")
+          len-sym (gensym "len")
+          ctx {:idx idx :len len-sym :step step}]
+      `(let [start# ~start
+             ~end-sym ~end
+             ~step-sym ~step
+             ~len-sym (quot (+ (- ~end-sym start#) (dec ~step-sym)) ~step-sym)]
+         (loop [~idx start#
+                ~@(-transform-aloop ctx state-bindings)]
+           (let [~elem-var (when (< ~idx ~end-sym) ~idx)]
+             ~@(-transform-aloop ctx body)))))
+    ;; Regular array path (existing behavior)
+    (let [idx (gensym "idx")
+          arr (gensym "arr")
+          len (gensym "len")
+          ctx {:idx idx :arr arr :it elem-var :len len}]
+      `(let [~arr ~arr-expr
+             ~len (count ~arr)]
+         (loop [~idx 0
+                ~@(-transform-aloop ctx state-bindings)]
+           (let [~elem-var (when (< ~idx ~len) (aref ~arr ~idx))]
+             ~@(-transform-aloop ctx body)))))))
 
 (defmacro push-end
   "Add an element to the end of a collection.
@@ -369,6 +412,11 @@
 
 
 (comment
+  ;; Range optimization examples
   (macroexpand '(aloop (range 5) a [x (length ::aloop)] (if a (recur x) x)))
+  (macroexpand '(aloop (range 3 7) e [sum 0] (if e (recur (+ sum e)) sum)))
+  (macroexpand '(aloop (range 0 10 2) e [sum 0] (if e (recur (+ sum e)) sum)))
+
+  ;; forv examples
   (macroexpand '(forv [i (range 1 5)] i))
   (forv [i (range 1 5)] i))
