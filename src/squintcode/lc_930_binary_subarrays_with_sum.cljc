@@ -8,8 +8,8 @@
            (inc (cl/aref arr k)))
   arr)
 
-(defn init-prefix-sum-frequencies [nums]
-  (let [arr (cl/make-array (inc (cl/length nums))
+(defn init-prefix-sum-frequencies [length]
+  (let [arr (cl/make-array (inc length)
                            :element-type 'integer
                            :initial-element 0)]
     (cl/setf (cl/aref arr 0) 1)
@@ -30,7 +30,7 @@
   (cl/aloop nums num
             [running-sum 0
              result 0
-             prefix-sum-frequencies (init-prefix-sum-frequencies nums)]
+             prefix-sum-frequencies (init-prefix-sum-frequencies (cl/length ::aloop))]
             (if num
               (let [running-sum' (+ running-sum num)]
                 (recur running-sum'

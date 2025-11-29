@@ -73,21 +73,17 @@
      `(let [v# (.get ^java.util.Map ~ht ~key)]
         (if (nil? v#) ~default v#)))))
 
-(defn- postwalk
-  "Depth-first post-order traversal.
-   Visits children first, then applies f to the parent.
-   Recursively walks sequences and vectors, applying f to each node after walking its children."
+(defn- prewalk
+  "Depth-first pre-order traversal.
+   Applies f before visiting children, and stops descending if f returns a reduced value."
   [f form]
-  (let [walked (cond
-                 (seq? form)
-                 (map #(postwalk f %) form)
-
-                 (vector? form)
-                 (vec (map #(postwalk f %) form))
-
-                 :else
-                 form)]
-    (f walked)))
+  (let [result (f form)]
+    (if (reduced? result)
+      @result
+      (cond
+        (seq? result) (map #(prewalk f %) result)
+        (vector? result) (vec (map #(prewalk f %) result))
+        :else result))))
 
 (defmacro make-array
   "Create an array, optionally with initial contents or element type.
@@ -171,16 +167,44 @@
 #?(:clj
    (defmacro length
      ([] `(fn [arr#] (count arr#)))
-     ([arr] `(count ~arr)))
+     ([arr] `(count ~arr))
+     ([arr _opts] `(count ~arr)))
    :default
    (defmacro length
      ([] `count)
-     ([arr] `(.-length ~arr))))
+     ([arr] `(.-length ~arr))
+     ([arr _opts] `(.-length ~arr))))
 
 (comment
   (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2)
   (setf (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2) "hello")
   (push-end (make-array 5 :initial-contents [1 2 3 4 5]) 2))
+
+(defmacro aloop-length [xs]
+  (throw (ex-info "must be called within an aloop" {})))
+
+(defn- -replace-recur [{idx :idx} form]
+  (if (and (seq? form) (= 'recur (first form)))
+    `(recur (inc ~idx) ~@(rest form))
+    form))
+
+(defn- name-or-string [x]
+  (if (or (symbol? x) (keyword? x))
+    (name x)
+    (str x)))
+
+(defn- -replace-aloop-len [{len :len} form]
+  (if (and (seq? form) (= (map name-or-string form) (list "length" "aloop")))
+    len
+    form))
+
+(defn- -stop-at-aloop [ctx form]
+  (if (and (seq? form) (= "aloop" (name-or-string (first form))))
+    (reduced form)
+    form))
+
+(defn- -transform-aloop [ctx body]
+  (map (partial prewalk (reduce comp (map partial [-stop-at-aloop -replace-aloop-len -replace-recur] (repeat ctx)))) body))
 
 (defmacro aloop
   "Optimized array iteration with O(1) access and implicit index management.
@@ -202,16 +226,13 @@
   (let [idx (gensym "idx")
         arr (gensym "arr")
         len (gensym "len")
-        replace-recur (fn [form]
-                        (if (and (seq? form) (= 'recur (first form)))
-                          `(recur (inc ~idx) ~@(rest form))
-                          form))]
+        ctx {:idx idx :arr arr :it elem-var :len len}]
     `(let [~arr ~arr-expr
            ~len (count ~arr)]
        (loop [~idx 0
-              ~@state-bindings]
+              ~@(-transform-aloop ctx state-bindings)]
          (let [~elem-var (when (< ~idx ~len) (aref ~arr ~idx))]
-           ~@(map #(postwalk replace-recur %) body))))))
+           ~@(-transform-aloop ctx body))))))
 
 (defmacro push-end
   "Add an element to the end of a collection.
@@ -348,5 +369,6 @@
 
 
 (comment
+  (macroexpand '(aloop (range 5) a [x (length ::aloop)] (if a (recur x) x)))
   (macroexpand '(forv [i (range 1 5)] i))
   (forv [i (range 1 5)] i))
