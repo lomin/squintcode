@@ -6,7 +6,7 @@
 
 #?(:cljs (enable-console-print!))
 
-(defn -main [& args]
+(defn -main [& _args]
   (run-tests 'squintcode.fizzbuzz-test
              'squintcode.push-end-test))
 

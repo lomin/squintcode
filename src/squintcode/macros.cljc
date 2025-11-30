@@ -215,7 +215,7 @@
     len
     form))
 
-(defn- -stop-at-aloop [ctx form]
+(defn- -stop-at-aloop [_ctx form]
   (if (and (seq? form) (= "aloop" (name-or-string (first form))))
     (reduced form)
     form))
@@ -428,3 +428,114 @@
   ;; forv examples
   (macroexpand '(forv [i (range 1 5)] i))
   (forv [i (range 1 5)] i))
+
+;;; ==========================================================================
+;;; defclass* - CLOS-inspired class definition for LeetCode
+;;; ==========================================================================
+
+;; defclass* macro - defined separately per platform
+;; :clj version is used by both Clojure AND ClojureScript (macros loaded from JVM)
+;; :default version is used by Squint (macros loaded via SCI)
+
+#?(:clj
+   (defmacro defclass*
+     "Define a class with CLOS-inspired syntax. Works on Squint, CLJ, and CLJS.
+
+   Syntax:
+     (defclass* ClassName [slot1 slot2]
+       (:init (arg1 arg2)
+         {:slot1 (compute arg1)
+          :slot2 arg2})
+
+       (:method methodName (arg1)
+         (+ slot1 arg1)))
+
+   - Slots are declared as a vector after the class name
+   - :init returns a map of {slot-keyword -> value}
+   - :method bodies can reference slots directly
+
+   Usage:
+     Squint:   (new ClassName arg1 arg2)
+     CLJ/CLJS: (->ClassName arg1 arg2)"
+     [class-name slots & specs]
+     (let [init-spec (first (filter #(and (seq? %) (= :init (first %))) specs))
+           method-specs (filter #(and (seq? %) (= :method (first %))) specs)
+           [_ init-args & init-body] init-spec
+           methods (for [[_ mname margs & mbody] method-specs]
+                     {:name mname :args margs :body mbody})
+           factory-name (symbol (str "->" class-name))
+           protocol-name (symbol (str "I" class-name))
+           cljs? (:ns &env)]
+       (if cljs?
+         ;; CLJS: Use Object for duck-typed methods (JS style)
+         ;; Use set! to replace the auto-generated factory without "being replaced" warning
+         `(do
+            (deftype ~class-name [~@slots]
+              ~'Object
+              ~@(for [{:keys [name args body]} methods]
+                  `(~name [~'this ~@args] ~@body)))
+
+            (set! ~factory-name
+                  (fn [~@init-args]
+                    (let [~'__init (do ~@init-body)]
+                      (new ~class-name ~@(for [slot slots]
+                                           `(~(keyword slot) ~'__init)))))))
+         ;; CLJ: Need protocol for custom methods, use deftype (not defrecord)
+         ;; to avoid auto-generated factory function conflict
+         `(do
+            (defprotocol ~protocol-name
+              ~@(for [{:keys [name args]} methods]
+                  `(~name [~'this ~@args])))
+
+            (deftype ~class-name [~@slots]
+              ~protocol-name
+              ~@(for [{:keys [name args body]} methods]
+                  `(~name [~'this ~@args] ~@body)))
+
+            (defn ~factory-name [~@init-args]
+              (let [~'__init (do ~@init-body)]
+                (new ~class-name ~@(for [slot slots]
+                                     `(~(keyword slot) ~'__init)))))))))
+
+   :default
+   (defmacro defclass*
+     "Define a class with CLOS-inspired syntax (Squint version)."
+     [class-name slots & specs]
+     (letfn [(-slot->field [slot]
+               (symbol (str "-" (name slot))))
+             (-rewrite-slots-for-squint [slots form]
+               (let [slot-set (set (map name slots))]
+                 (prewalk
+                  (fn [x]
+                    (if (and (symbol? x) (slot-set (name x)))
+                      (-slot->field x)
+                      x))
+                  form)))]
+       (let [init-spec (first (filter #(and (seq? %) (= :init (first %))) specs))
+             method-specs (filter #(and (seq? %) (= :method (first %))) specs)
+             [_ init-args & init-body] init-spec
+             methods (for [[_ mname margs & mbody] method-specs]
+                       {:name mname :args margs :body mbody})]
+         `(~'defclass ~class-name
+                      ~@(for [slot slots]
+                          (list 'field (-slot->field slot)))
+
+                      (~'constructor [~'this ~@init-args]
+                                     (let [~'__init (do ~@init-body)]
+                                       ~@(for [slot slots]
+                                           `(set! ~(-slot->field slot) (~(keyword slot) ~'__init)))))
+
+                      ~'Object
+                      ~@(for [{:keys [name args body]} methods]
+                          `(~name [~'this ~@args]
+                                  ~@(-rewrite-slots-for-squint slots body))))))))
+
+(comment
+  ;; Example usage:
+  (defclass* NumArray [prefix-sum]
+    (:init (nums)
+           {:prefix-sum nums})
+
+    (:method sumRange (left right)
+             (- (aref prefix-sum (inc right))
+                (aref prefix-sum left)))))
