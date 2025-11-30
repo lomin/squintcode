@@ -167,33 +167,34 @@
 #?(:clj
    (defmacro length
      ([] `(fn [arr#] (count arr#)))
-     ([arr] `(count ~arr))
-     ([arr _opts] `(count ~arr)))
+     ([arr] `(count ~arr)))
    :default
    (defmacro length
      ([] `count)
-     ([arr] `(.-length ~arr))
-     ([arr _opts] `(.-length ~arr))))
+     ([arr] `(.-length ~arr))))
 
 (comment
   (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2)
   (setf (aref (make-array 5 :initial-contents [1 2 3 4 5]) 2) "hello")
   (push-end (make-array 5 :initial-contents [1 2 3 4 5]) 2))
 
-(defmacro aloop-length [xs]
-  (throw (ex-info "must be called within an aloop" {})))
-
-(defn- -replace-recur [{:keys [idx step]} form]
+(defn- -replace-recur [{:keys [idx step step-sym]} form]
   (if (and (seq? form) (= 'recur (first form)))
-    (if (or (nil? step) (= step 1))
-      `(recur (inc ~idx) ~@(rest form))
-      `(recur (+ ~idx ~step) ~@(rest form)))
+    (cond
+      (or (nil? step) (= step 1)) `(recur (inc ~idx) ~@(rest form))
+      step-sym `(recur (+ ~idx ~step-sym) ~@(rest form)))
     form))
 
 (defn- name-or-string [x]
   (if (or (symbol? x) (keyword? x))
     (name x)
     (str x)))
+
+(defn- strip-namespace [x]
+  (cond (list? x) (map strip-namespace x)
+        (symbol? x) (symbol (name x))
+        (keyword? x) (name x)
+        :else (str x)))
 
 (defn- parse-range-expr
   "Returns {:start _ :end _ :step _} if expr is (range ...), nil otherwise.
@@ -210,7 +211,7 @@
       nil)))
 
 (defn- -replace-aloop-len [{len :len} form]
-  (if (and (seq? form) (= (map name-or-string form) (list "length" "aloop")))
+  (if (and (seq? form) (= (strip-namespace form) '(length self)))
     len
     form))
 
@@ -221,6 +222,9 @@
 
 (defn- -transform-aloop [ctx body]
   (map (partial prewalk (reduce comp (map partial [-stop-at-aloop -replace-aloop-len -replace-recur] (repeat ctx)))) body))
+
+(defmacro with [_]
+  (throw (ex-info "must only be used inside aloop" {})))
 
 (defmacro aloop
   "Anaphoric array iteration with O(1) access and implicit index management.
@@ -236,7 +240,7 @@
    - it: bound to current array element (or index for range) (nil when past end)
    - state-bindings: additional loop state variables
    - (recur ...): implicitly increments the index
-   - (length ::aloop): access the length within the loop body
+   - (length self): access the collection length within the loop body
 
    For range expressions, no collection is allocated - generates direct numeric loop.
 
@@ -262,7 +266,7 @@
           end-sym (gensym "end")
           step-sym (gensym "step")
           len-sym (gensym "len")
-          ctx {:idx idx :len len-sym :step step}]
+          ctx {:idx idx :len len-sym :step step :step-sym step-sym}]
       `(let [start# ~start
              ~end-sym ~end
              ~step-sym ~step
@@ -304,7 +308,6 @@
        (cond-> xs#
          (.isArray (class xs#)) (->> (java.util.Arrays/asList) (new java.util.ArrayList))
          :always (doto (.add ^java.util.List ~val))))))
-
 
 ;; Test framework macros for Squint
 (defmacro deftest
@@ -416,10 +419,9 @@
            ~(-set-at &env arr-sym idx-sym body)))
        ~arr-sym)))
 
-
 (comment
-  ;; Anaphoric aloop examples (binds to 'it')
-  (macroexpand '(aloop (range 5) [x (length ::aloop)] (if it (recur x) x)))
+  ;; Anaphoric aloop examples (binds to 'it', 'self' refers to the collection)
+  (macroexpand '(aloop (range 5) [x (length self)] (if it (recur x) x)))
   (macroexpand '(aloop (range 3 7) [sum 0] (if it (recur (+ sum it)) sum)))
   (macroexpand '(aloop (range 0 10 2) [sum 0] (if it (recur (+ sum it)) sum)))
 

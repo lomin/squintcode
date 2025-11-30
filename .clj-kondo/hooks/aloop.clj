@@ -4,13 +4,15 @@
 (defn aloop [{:keys [node]}]
   (let [[_ arr-expr state-bindings & body] (:children node)]
     ;; Transform (aloop arr [bindings] body)
-    ;; into (let [it (nth arr 0 nil)] (loop [bindings] body))
-    ;; Anaphoric macro: always binds to 'it'
+    ;; into (let [self arr, it (nth arr 0 nil)] (loop [bindings] body))
+    ;; Anaphoric macro: binds 'it' to current element, 'self' to the collection
     (when (api/vector-node? state-bindings)
       {:node (api/list-node
               [(api/token-node 'let)
                (api/vector-node
-                [(api/token-node 'it)
+                [(api/token-node 'self)
+                 arr-expr
+                 (api/token-node 'it)
                  (api/list-node
                   [(api/token-node 'nth)
                    arr-expr

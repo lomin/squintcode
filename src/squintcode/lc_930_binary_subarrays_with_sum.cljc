@@ -2,7 +2,6 @@
   #?(:cljs (:require-macros [squintcode.macros  :as cl]))
   #?(:clj  (:require [squintcode.macros :as cl])))
 
-
 (defn incf-array [arr k]
   (cl/setf (cl/aref arr k)
            (inc (cl/aref arr k)))
@@ -30,14 +29,13 @@
   (cl/aloop nums
             [running-sum 0
              result 0
-             prefix-sum-frequencies (init-prefix-sum-frequencies (cl/length ::aloop))]
+             prefix-sum-frequencies (init-prefix-sum-frequencies (cl/length self))]
             (if it
               (let [running-sum' (+ running-sum it)]
                 (recur running-sum'
                        (+ result (count-matching-subarrays prefix-sum-frequencies running-sum' goal))
                        (incf-array prefix-sum-frequencies running-sum')))
               result)))
-
 
 (comment
 ; expecting: 4
