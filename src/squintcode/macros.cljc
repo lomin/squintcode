@@ -1,5 +1,5 @@
 (ns squintcode.macros
-  (:refer-clojure :exclude [make-array]))
+  (:refer-clojure :exclude [make-array defclass]))
 
 ;; Extend IIndexed protocol for Uint32Array in ClojureScript
 ;; This allows (nth typed-array index) to work
@@ -430,19 +430,19 @@
   (forv [i (range 1 5)] i))
 
 ;;; ==========================================================================
-;;; defclass* - CLOS-inspired class definition for LeetCode
+;;; defclass - CLOS-inspired class definition for LeetCode
 ;;; ==========================================================================
 
-;; defclass* macro - defined separately per platform
+;; defclass macro - defined separately per platform
 ;; :clj version is used by both Clojure AND ClojureScript (macros loaded from JVM)
 ;; :default version is used by Squint (macros loaded via SCI)
 
 #?(:clj
-   (defmacro defclass*
+   (defmacro defclass
      "Define a class with CLOS-inspired syntax. Works on Squint, CLJ, and CLJS.
 
    Syntax:
-     (defclass* ClassName [slot1 slot2]
+     (defclass ClassName [slot1 slot2]
        (:init (arg1 arg2)
          {:slot1 (compute arg1)
           :slot2 arg2})
@@ -498,7 +498,7 @@
                                      `(~(keyword slot) ~'__init)))))))))
 
    :default
-   (defmacro defclass*
+   (defmacro defclass
      "Define a class with CLOS-inspired syntax (Squint version)."
      [class-name slots & specs]
      (letfn [(-slot->field [slot]
@@ -532,7 +532,7 @@
 
 (comment
   ;; Example usage:
-  (defclass* NumArray [prefix-sum]
+  (defclass NumArray [prefix-sum]
     (:init (nums)
            {:prefix-sum nums})
 

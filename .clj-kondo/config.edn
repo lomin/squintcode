@@ -1,4 +1,4 @@
 {:hooks {:analyze-call {squintcode.macros/aloop hooks.aloop/aloop
-                        squintcode.macros/defclass* hooks.defclass/defclass*}}
+                        squintcode.macros/defclass hooks.defclass/defclass}}
  :lint-as {squintcode.macros/forv clojure.core/for}
  :linters {:unused-binding {:level :off}}}

@@ -1,8 +1,8 @@
 (ns hooks.defclass
   (:require [clj-kondo.hooks-api :as api]))
 
-(defn defclass* [{:keys [node]}]
-  ;; Transform (defclass* ClassName [slots...]
+(defn defclass [{:keys [node]}]
+  ;; Transform (defclass ClassName [slots...]
   ;;             (:init (args...) body...)
   ;;             (:method name (args...) body...))
   ;; into something clj-kondo understands

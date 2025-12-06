@@ -23,7 +23,7 @@
                   (recur (inc i) sum'))
                 ps))))
 
-(cl/defclass* NumArray [prefix-sum]
+(cl/defclass NumArray [prefix-sum]
   (:init (nums)
          {:prefix-sum (build-prefix-sum nums)})
 
