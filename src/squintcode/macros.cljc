@@ -367,7 +367,7 @@
 (defn- -set-at [env arr idx value]
   (if (:ns env)
     `(aset ~arr ~idx ~value)
-    `(.set ~arr ~idx ~value)))
+     `(let [v# ~value] (.set ~arr ~idx v#) v#)))
 
 (defmacro setf [place value]
   "setf: Common Lisp-style generalized assignment
