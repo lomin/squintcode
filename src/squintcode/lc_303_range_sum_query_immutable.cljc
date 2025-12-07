@@ -14,14 +14,12 @@
 ;; Space: O(n) for prefix sum array
 
 (defn- build-prefix-sum [nums]
-  (let [n #?(:squint (.-length nums) :default (count nums))
-        ps (cl/make-array (inc n) :initial-element 0)]
-    (cl/aloop nums [i 0, sum 0]
-              (if it
-                (let [sum' (+ sum it)]
-                  (cl/setf (cl/aref ps (inc i)) sum')
-                  (recur (inc i) sum'))
-                ps))))
+  (cl/aloop nums [i 1
+                  sum 0
+                  ps (cl/with (cl/make-array (inc (cl/length nums)) :initial-element 0))]
+            (if it
+              (recur (inc i) (cl/setf (cl/aref ps i) (+ sum it)))
+              ps)))
 
 (cl/defclass NumArray [prefix-sum]
   (:init (nums)
@@ -32,10 +30,5 @@
               (cl/aref prefix-sum left))))
 
 (comment
-  ;; Usage:
-  ;; Squint: (new NumArray #js [-2 0 3 -5 2 -1])
-  ;; CLJ/CLJS: (->NumArray [...])
-  ;; (.sumRange num-array 0 2)  ; => 1
   (let [n (->NumArray (cl/make-array 5 :initial-contents [1 2 3 4 5]))]
-    (.sumRange n 0 2))
-  )
+    (.sumRange n 0 2)))

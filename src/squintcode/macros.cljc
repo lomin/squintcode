@@ -190,6 +190,29 @@
     (name x)
     (str x)))
 
+(defn- with-form?
+  "Check if form is a (with ...) or (namespace/with ...) call"
+  [form]
+  (and (seq? form)
+       (symbol? (first form))
+       (= "with" (name (first form)))))
+
+(defn- unwrap-with
+  "If form is a with form, return the inner expression. Otherwise return form."
+  [form]
+  (if (with-form? form)
+    (second form)
+    form))
+
+(defn- process-bindings-with-order
+  "Process bindings preserving order. Returns:
+   {:all-bindings [...] - all bindings with 'with' unwrapped, for outer let
+    :loop-binding-names [...] - names of non-with bindings, for loop re-binding}"
+  [bindings]
+  (let [pairs (partition 2 bindings)]
+    {:all-bindings (vec (mapcat (fn [[k v]] [k (unwrap-with v)]) pairs))
+     :loop-binding-names (vec (keep (fn [[k v]] (when-not (with-form? v) k)) pairs))}))
+
 (defn- strip-namespace [x]
   (cond (list? x) (map strip-namespace x)
         (symbol? x) (symbol (name x))
@@ -242,6 +265,19 @@
    - (recur ...): implicitly increments the index
    - (length self): access the collection length within the loop body
 
+   Static bindings with (with ...):
+   Bindings wrapped in (with ...) are evaluated once before the loop and are
+   NOT part of the loop/recur. They stay constant (though can be mutated).
+   This is inspired by Common Lisp's iterate library.
+
+   (aloop nums [i 0
+                sum 0
+                result (with (make-array 10))]  ; result is NOT recurred
+     (if it
+       (do (setf (aref result i) (+ sum it))
+           (recur (inc i) (+ sum it)))          ; only i and sum are recurred
+       result))
+
    For range expressions, no collection is allocated - generates direct numeric loop.
 
    Example:
@@ -260,32 +296,35 @@
      (let [outer it]
        (aloop outer [...] ...it...)))"
   [arr-expr state-bindings & body]
-  (if-let [{:keys [start end step]} (parse-range-expr arr-expr)]
-    ;; Range optimization path - no collection allocation
-    (let [idx (gensym "idx")
-          end-sym (gensym "end")
-          step-sym (gensym "step")
-          len-sym (gensym "len")
-          ctx {:idx idx :len len-sym :step step :step-sym step-sym}]
-      `(let [start# ~start
-             ~end-sym ~end
-             ~step-sym ~step
-             ~len-sym (quot (+ (- ~end-sym start#) (dec ~step-sym)) ~step-sym)]
-         (loop [~idx start#
-                ~@(-transform-aloop ctx state-bindings)]
-           (let [~'it (when (< ~idx ~end-sym) ~idx)]
-             ~@(-transform-aloop ctx body)))))
-    ;; Regular array path (existing behavior)
-    (let [idx (gensym "idx")
-          arr (gensym "arr")
-          len (gensym "len")
-          ctx {:idx idx :arr arr :it 'it :len len}]
-      `(let [~arr ~arr-expr
-             ~len (count ~arr)]
-         (loop [~idx 0
-                ~@(-transform-aloop ctx state-bindings)]
-           (let [~'it (when (< ~idx ~len) (aref ~arr ~idx))]
-             ~@(-transform-aloop ctx body)))))))
+  (let [{:keys [all-bindings loop-binding-names]} (process-bindings-with-order state-bindings)]
+    (if-let [{:keys [start end step]} (parse-range-expr arr-expr)]
+      ;; Range optimization path - no collection allocation
+      (let [idx (gensym "idx")
+            end-sym (gensym "end")
+            step-sym (gensym "step")
+            len-sym (gensym "len")
+            ctx {:idx idx :len len-sym :step step :step-sym step-sym}]
+        `(let [start# ~start
+               ~end-sym ~end
+               ~step-sym ~step
+               ~len-sym (quot (+ (- ~end-sym start#) (dec ~step-sym)) ~step-sym)
+               ~@(-transform-aloop ctx all-bindings)]
+           (loop [~idx start#
+                  ~@(interleave loop-binding-names loop-binding-names)]
+             (let [~'it (when (< ~idx ~end-sym) ~idx)]
+               ~@(-transform-aloop ctx body)))))
+      ;; Regular array path
+      (let [idx (gensym "idx")
+            arr (gensym "arr")
+            len (gensym "len")
+            ctx {:idx idx :arr arr :it 'it :len len}]
+        `(let [~arr ~arr-expr
+               ~len (length ~arr)
+               ~@(-transform-aloop ctx all-bindings)]
+           (loop [~idx 0
+                  ~@(interleave loop-binding-names loop-binding-names)]
+             (let [~'it (when (< ~idx ~len) (aref ~arr ~idx))]
+               ~@(-transform-aloop ctx body))))))))
 
 (defmacro push-end
   "Add an element to the end of a collection.
@@ -367,7 +406,7 @@
 (defn- -set-at [env arr idx value]
   (if (:ns env)
     `(aset ~arr ~idx ~value)
-     `(let [v# ~value] (.set ~arr ~idx v#) v#)))
+    `(let [v# ~value] (.set ~arr ~idx v#) v#)))
 
 (defmacro setf [place value]
   "setf: Common Lisp-style generalized assignment
