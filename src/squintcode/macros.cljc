@@ -1,5 +1,6 @@
 (ns squintcode.macros
-  (:refer-clojure :exclude [make-array defclass]))
+  (:refer-clojure :exclude [make-array defclass])
+  (:require [clojure.string]))
 
 ;; Extend IIndexed protocol for Uint32Array in ClojureScript
 ;; This allows (nth typed-array index) to work
@@ -28,6 +29,20 @@
   (if (keyword? k)
     (name k)
     k))
+
+(defn- field->getter
+  "Convert field symbol to getter method symbol: next -> getNext"
+  [field]
+  (let [field-name (name field)]
+    (symbol (str "get" (clojure.string/upper-case (subs field-name 0 1))
+                 (subs field-name 1)))))
+
+(defn- field->setter
+  "Convert field symbol to setter method symbol: next -> setNext"
+  [field]
+  (let [field-name (name field)]
+    (symbol (str "set" (clojure.string/upper-case (subs field-name 0 1))
+                 (subs field-name 1)))))
 
 (defmacro dict
   "Create a mutable map efficiently.
@@ -72,6 +87,23 @@
      ;; HashMap returns null for missing keys
      `(let [v# (.get ^java.util.Map ~ht ~key)]
         (if (nil? v#) ~default v#)))))
+
+(defmacro get!
+  "Access a mutable field on an object.
+
+   Platform behavior:
+   - CLJ: Uses interface methods (.getField obj)
+   - CLJS/Squint: Uses property access (.-field obj)
+
+   Usage:
+   (get! obj field)            ; get field value
+   (setf (get! obj field) v)   ; set field value (via setf)"
+  [obj field]
+  (if (:ns &env)
+    ;; CLJS/Squint - direct property access
+    `(~(symbol (str ".-" (name field))) ~obj)
+    ;; CLJ - interface method call
+    `(~(symbol (str "." (name (field->getter field)))) ~obj)))
 
 (defn- prewalk
   "Depth-first pre-order traversal.
@@ -411,7 +443,8 @@
 (defmacro setf [place value]
   "setf: Common Lisp-style generalized assignment
    Supports setting array elements: (setf (aref arr idx) val)
-   Supports setting hash table entries: (setf (gethash ht key) val)"
+   Supports setting hash table entries: (setf (gethash ht key) val)
+   Supports setting object fields: (setf (get! obj field) val)"
   (if (seq? place)
     (let [sym (first place)
           sym-name (if (symbol? sym) (name sym) nil)]
@@ -430,6 +463,19 @@
             `(let [value# ~value] (.set ~ht ~(normalize-key key) value#) value#)
             ;; HashMap .put returns old value, so we need to return the new value
             `(let [value# ~value] (.put ^java.util.Map ~ht ~key value#) value#)))
+
+        ;; Setting object field via get!
+        (or (= 'get! sym) (= "get!" sym-name))
+        (let [[_ obj field] place]
+          (if (:ns &env)
+            ;; CLJS/Squint - direct property set
+            `(let [v# ~value]
+               (set! (~(symbol (str ".-" (name field))) ~obj) v#)
+               v#)
+            ;; CLJ - interface method call
+            `(let [v# ~value]
+               (~(symbol (str "." (name (field->setter field)))) ~obj v#)
+               v#)))
 
         ;; Unknown place form
         :else

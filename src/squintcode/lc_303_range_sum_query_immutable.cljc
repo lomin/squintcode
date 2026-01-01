@@ -1,5 +1,4 @@
 (ns squintcode.lc-303-range-sum-query-immutable
-  #?(:squint (:require-macros [squintcode.macros :as cl]))
   #?(:cljs (:require-macros [squintcode.macros :as cl]))
   #?(:clj (:require [squintcode.macros :as cl])))
 
