@@ -7,16 +7,17 @@
    (deftype ListNode [^:unsynchronized-mutable val
                       ^:unsynchronized-mutable next]))
 
-(defn move-n-forward [head n]
+(defn move-right-n-forward [head n]
   (if (and head (pos? n))
-    (recur (cl/get! head next) (dec n))
+    (recur (cl/get! head next)
+           (dec n))
     head))
 
-(defn move-to-end [left right]
+(defn move-left-n-from-end [left right]
   (if right
     (recur (cl/get! left next)
            (cl/get! right next))
-    [left right]))
+    left))
 
 (defn bypass [node]
   (cl/setf (cl/get! node next)
@@ -25,10 +26,11 @@
                    (cl/get! next))))
 
 (defn removeNthFromEnd [head n]
-  (let [dummy (new ListNode nil head)
-        right (move-n-forward head n)
-        [left _] (move-to-end dummy right)]
-    (bypass left)
+  (let [dummy (new ListNode nil head)]
+    (->>
+     (move-right-n-forward head n)
+     (move-left-n-from-end dummy)
+     (bypass))
     (cl/get! dummy next)))
 
 (comment
