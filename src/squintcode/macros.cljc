@@ -1,6 +1,5 @@
 (ns squintcode.macros
-  (:refer-clojure :exclude [make-array defclass])
-  (:require [clojure.string]))
+  (:refer-clojure :exclude [make-array defclass]))
 
 ;; Extend IIndexed protocol for Uint32Array in ClojureScript
 ;; This allows (nth typed-array index) to work
@@ -29,20 +28,6 @@
   (if (keyword? k)
     (name k)
     k))
-
-(defn- field->getter
-  "Convert field symbol to getter method symbol: next -> getNext"
-  [field]
-  (let [field-name (name field)]
-    (symbol (str "get" (clojure.string/upper-case (subs field-name 0 1))
-                 (subs field-name 1)))))
-
-(defn- field->setter
-  "Convert field symbol to setter method symbol: next -> setNext"
-  [field]
-  (let [field-name (name field)]
-    (symbol (str "set" (clojure.string/upper-case (subs field-name 0 1))
-                 (subs field-name 1)))))
 
 (defmacro dict
   "Create a mutable map efficiently.
@@ -92,7 +77,7 @@
   "Access a mutable field on an object.
 
    Platform behavior:
-   - CLJ: Uses interface methods (.getField obj)
+   - CLJ: Uses reflection to access deftype fields directly
    - CLJS/Squint: Uses property access (.-field obj)
 
    Usage:
@@ -102,8 +87,11 @@
   (if (:ns &env)
     ;; CLJS/Squint - direct property access
     `(~(symbol (str ".-" (name field))) ~obj)
-    ;; CLJ - interface method call
-    `(~(symbol (str "." (name (field->getter field)))) ~obj)))
+    ;; CLJ - reflection field access
+    `(let [o# ~obj
+           ^java.lang.reflect.Field f# (doto (.getDeclaredField (class o#) ~(str field))
+                                         (.setAccessible true))]
+       (.get f# o#))))
 
 (defn- prewalk
   "Depth-first pre-order traversal.
@@ -472,9 +460,12 @@
             `(let [v# ~value]
                (set! (~(symbol (str ".-" (name field))) ~obj) v#)
                v#)
-            ;; CLJ - interface method call
-            `(let [v# ~value]
-               (~(symbol (str "." (name (field->setter field)))) ~obj v#)
+            ;; CLJ - reflection field set
+            `(let [o# ~obj
+                   v# ~value
+                   ^java.lang.reflect.Field f# (doto (.getDeclaredField (class o#) ~(str field))
+                                                 (.setAccessible true))]
+               (.set f# o# v#)
                v#)))
 
         ;; Unknown place form

@@ -1,23 +1,11 @@
 (ns squintcode.lc-19-remove-nth-node-from-end-of-list
   #?(:cljs (:require-macros [squintcode.macros :as cl]))
-  #?(:clj (:require [squintcode.macros :as cl]))
-  #?(:squint (:require-macros [squintcode.macros :as cl :refer [get! setf]])))
+  #?(:clj (:require [squintcode.macros :as cl])))
 
 #?(:squint nil
-   :clj (do
-          (definterface IListNode
-            (getVal [])
-            (getNext [])
-            (setVal [v])
-            (setNext [v]))
-          (deftype ListNode [^:unsynchronized-mutable ^Object val
-                             ^:unsynchronized-mutable ^Object next]
-            IListNode
-            (getVal [_] val)
-            (getNext [_] next)
-            (setVal [_ v] (set! val v))
-            (setNext [_ v] (set! next v))))
-   :cljs (deftype ListNode [^:mutable val ^:mutable next]))
+   :default
+   (deftype ListNode [^:unsynchronized-mutable val
+                      ^:unsynchronized-mutable next]))
 
 (defn move-n-forward [head n]
   (if (and head (pos? n))
