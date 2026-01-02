@@ -89,7 +89,7 @@
     `(~(symbol (str ".-" (name field))) ~obj)
     ;; CLJ - reflection field access
     `(let [o# ~obj
-           ^java.lang.reflect.Field f# (doto (.getDeclaredField (class o#) ~(str field))
+           ^java.lang.reflect.Field f# (doto (.getDeclaredField (class o#) ~(name field))
                                          (.setAccessible true))]
        (.get f# o#))))
 
@@ -463,7 +463,7 @@
             ;; CLJ - reflection field set
             `(let [o# ~obj
                    v# ~value
-                   ^java.lang.reflect.Field f# (doto (.getDeclaredField (class o#) ~(str field))
+                   ^java.lang.reflect.Field f# (doto (.getDeclaredField (class o#) ~(name field))
                                                  (.setAccessible true))]
                (.set f# o# v#)
                v#)))

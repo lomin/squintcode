@@ -18,11 +18,17 @@
            (cl/get! right next))
     [left right]))
 
+(defn bypass [node]
+  (cl/setf (cl/get! node next)
+           (some-> node
+                   (cl/get! next)
+                   (cl/get! next))))
+
 (defn removeNthFromEnd [head n]
   (let [dummy (new ListNode nil head)
         right (move-n-forward head n)
         [left _] (move-to-end dummy right)]
-    (cl/setf (cl/get! left next) (cl/get! (cl/get! left next) next))
+    (bypass left)
     (cl/get! dummy next)))
 
 (comment
@@ -30,7 +36,7 @@
     "Convert a vector/list to a linked list"
     [coll]
     (reduce (fn [next-node val]
-              (ListNode val next-node))
+              (new ListNode val next-node))
             nil
             (reverse coll)))
 
