@@ -1,9 +1,11 @@
-{:paths ["src" "test"]
+{:paths ["src" "test" "bb"]
+ :deps {metosin/malli {:mvn/version "0.20.0"}}
 
  :tasks
  {:requires ([babashka.fs :as fs]
              [babashka.process :refer [shell process]]
-             [clojure.string :as str])
+             [clojure.string :as str]
+             [tasks.git])
 
   :init (def project-root (fs/cwd))
 
@@ -118,8 +120,8 @@
                  (let [bundle-content (slurp bundle-file)
                        ;; Use regex to remove export block at end of file
                        clean-content (str/replace bundle-content
-                                                   (re-pattern "(?s)\\nexport \\{[^}]*\\};?\\s*$")
-                                                   "")]
+                                                  (re-pattern "(?s)\\nexport \\{[^}]*\\};?\\s*$")
+                                                  "")]
                    (spit final-file clean-content))
 
                  ;; Delete bundle file
@@ -224,8 +226,8 @@
                (let [bundle-content (slurp bundle-file)
                      ;; Use regex to remove export block at end of file
                      clean-content (str/replace bundle-content
-                                                 (re-pattern "(?s)\\nexport \\{[^}]*\\};?\\s*$")
-                                                 "")]
+                                                (re-pattern "(?s)\\nexport \\{[^}]*\\};?\\s*$")
+                                                "")]
                  (spit output-file clean-content))
 
                ;; Clean up bundle file
@@ -263,4 +265,28 @@
 
   build
   {:doc "Alias for build-all"
-   :depends [build-all]}}}
+   :depends [build-all]}
+
+  ;; ============================================================================
+  ;; GIT TASKS
+  ;; ============================================================================
+
+  git:plan
+  {:doc "Show staged changes grouped by status"
+   :task (tasks.git/plan *command-line-args*)}
+
+  git:snapshot
+  {:doc "Snapshot staged files to .git/commit-snapshot"
+   :task (tasks.git/snapshot *command-line-args*)}
+
+  git:commit
+  {:doc "Commit staged content for listed paths using temp index"
+   :task (tasks.git/commit *command-line-args*)}
+
+  git:staged
+  {:doc "List staged files with status"
+   :task (tasks.git/staged *command-line-args*)}
+
+  git:unstage
+  {:doc "Unstage files (works for add/modify/delete)"
+   :task (tasks.git/unstage *command-line-args*)}}}
