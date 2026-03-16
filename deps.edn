@@ -1,6 +1,6 @@
 {:paths ["src" "test"]
 
- :deps {org.clojure/clojurescript {:mvn/version "1.11.132"}}
+ :deps {org.clojure/clojurescript {:mvn/version "1.12.42"}}
 
  :aliases
  {;; Start a ClojureScript REPL (for Calva and interactive development)
