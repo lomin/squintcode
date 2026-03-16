@@ -54,3 +54,6 @@ yarn-error.log*
 # Local Claude Code settings
 .claude/settings.local.json
 .mcp.json
+
+# local files
+local/
