@@ -2,7 +2,8 @@
   (:require #?@(:squint []
                 :clj [[clojure.test :refer [deftest is]]
                       [squintcode.macros :as cl]]
-                :cljs [[cljs.test :refer-macros [deftest is]]])
+                :cljs [[cljs.test :refer-macros [deftest is]]
+                       [squintcode.leetcode-setup]])
             [squintcode.lc-930-binary-subarrays-with-sum :refer [numSubarraysWithSum]]
             #?(:squint ["assert" :as assert]))
   #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is]])

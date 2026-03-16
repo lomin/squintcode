@@ -1,24 +1,6 @@
 (ns squintcode.macros
   (:refer-clojure :exclude [make-array defclass]))
 
-;; Extend IIndexed protocol for Uint32Array in ClojureScript
-;; This allows (nth typed-array index) to work
-#?(:squint (comment "nothing to do")
-   :cljs
-   (do
-     (extend-type js/Uint32Array
-       IIndexed
-       (-nth
-         ([coll n]
-          (aget coll n))
-         ([coll n not-found]
-          (if (and (>= n 0) (< n (.-length coll)))
-            (aget coll n)
-            not-found)))
-       ICounted
-       (-count [coll]
-         (.-length coll)))))
-
 (defn- normalize-key
   "Convert keywords to strings at compile time for JS Map compatibility.
    - Keywords -> strings (e.g., :a -> \"a\")
