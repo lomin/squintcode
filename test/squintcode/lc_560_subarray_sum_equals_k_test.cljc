@@ -1,10 +1,8 @@
 (ns squintcode.lc-560-subarray-sum-equals-k-test
-  (:require #?@(:squint []
-                :clj [[clojure.test :refer [deftest is testing run-tests]]]
-                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]])
-            [squintcode.lc-560-subarray-sum-equals-k :refer [subarraySum]]
-            #?(:squint ["assert" :as assert]))
-  #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing run-tests]])))
+  (:require #?@(:squint [[squintcode.macros :refer [deftest is testing run-tests]]
+                         ["assert" :as assert]]
+                :default [[clojure.test :refer [deftest is testing run-tests]]])
+            [squintcode.lc-560-subarray-sum-equals-k :refer [subarraySum]]))
 
 (deftest subarray-sum-basic-test
   (testing "subarraySum with [1,2,3] and k=3"

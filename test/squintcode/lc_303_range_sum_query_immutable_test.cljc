@@ -1,11 +1,9 @@
 (ns squintcode.lc-303-range-sum-query-immutable-test
-  #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing run-tests]]))
-  (:require #?@(:squint [["assert" :as assert]
+  (:require #?@(:squint [[squintcode.macros :refer [deftest is testing run-tests]]
+                         ["assert" :as assert]
                          [squintcode.lc-303-range-sum-query-immutable :refer [NumArray]]]
-                :clj [[clojure.test :refer [deftest is testing run-tests]]
-                      [squintcode.lc-303-range-sum-query-immutable :refer [->NumArray]]]
-                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]
-                       [squintcode.lc-303-range-sum-query-immutable :refer [->NumArray]]])))
+                :default [[clojure.test :refer [deftest is testing run-tests]]
+                          [squintcode.lc-303-range-sum-query-immutable :refer [->NumArray]]])))
 
 (deftest basic-example-test
   (testing "LeetCode example: [-2, 0, 3, -5, 2, -1]"

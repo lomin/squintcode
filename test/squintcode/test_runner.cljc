@@ -1,6 +1,5 @@
 (ns squintcode.test-runner
-  (:require #?(:clj [clojure.test :refer [run-tests]]
-               :cljs [cljs.test :refer-macros [run-tests]])
+  (:require [clojure.test :refer [run-tests]]
             [squintcode.fizzbuzz-test]
             [squintcode.push-end-test]))
 

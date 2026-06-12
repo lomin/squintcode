@@ -1,20 +1,18 @@
 (ns squintcode.lc-19-remove-nth-node-from-end-of-list-test
-  (:require #?@(:squint []
+  (:require #?@(:squint [["assert" :as assert]
+                         [squintcode.leetcode-setup]
+                         [squintcode.lc-19-remove-nth-node-from-end-of-list
+                          :refer [removeNthFromEnd]]]
                 :clj [[clojure.test :refer [deftest is testing run-tests]]
                       [squintcode.lc-19-remove-nth-node-from-end-of-list
                        :refer [removeNthFromEnd]]
                       [squintcode.macros :as cl]]
-                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]
+                :cljs [[clojure.test :refer [deftest is testing run-tests]]
                        [squintcode.lc-19-remove-nth-node-from-end-of-list
-                        :refer [removeNthFromEnd ListNode]]])
-            ;; Squint-specific imports (JS syntax)
-            #?(:squint ["assert" :as assert])
-            #?(:squint [squintcode.leetcode-setup])
-            #?(:squint [squintcode.lc-19-remove-nth-node-from-end-of-list
-                        :refer [removeNthFromEnd]]))
+                        :refer [removeNthFromEnd ListNode]]]))
   #?(:clj (:import [squintcode.lc_19_remove_nth_node_from_end_of_list ListNode]))
-  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests get!]]))
-  #?(:cljs (:require-macros [squintcode.macros :as cl])))
+  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests get!]])
+     :cljs (:require-macros [squintcode.macros :as cl])))
 
 ;; Helper: convert vector to linked list
 (defn list->linked [coll]

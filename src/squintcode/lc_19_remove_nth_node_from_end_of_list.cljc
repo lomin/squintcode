@@ -1,6 +1,6 @@
 (ns squintcode.lc-19-remove-nth-node-from-end-of-list
-  #?(:cljs (:require-macros [squintcode.macros :as cl]))
-  #?(:clj (:require [squintcode.macros :as cl])))
+  #?(:cljs (:require-macros [squintcode.macros :as cl])
+     :clj (:require [squintcode.macros :as cl])))
 
 #?(:squint nil
    :default

@@ -1,6 +1,6 @@
 (ns squintcode.lc-560-subarray-sum-equals-k
-  #?(:cljs (:require-macros [squintcode.macros  :as cl]))
-  #?(:clj  (:require [squintcode.macros :as cl])))
+  #?(:cljs (:require-macros [squintcode.macros :as cl])
+     :clj (:require [squintcode.macros :as cl])))
 
 (defn incf [m k default]
   (if-let [v (cl/gethash m k)]

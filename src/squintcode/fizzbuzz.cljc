@@ -1,7 +1,7 @@
 (ns squintcode.fizzbuzz
-  #?(:cljs (:require-macros [squintcode.macros :as cl]))
-  (:require #?(:clj [squintcode.macros :as cl])
-            [squintcode.utils :refer [assoc-arr!]]))
+  #?(:cljs (:require-macros [squintcode.macros :as cl])
+     :clj (:require [squintcode.macros :as cl]))
+  (:require [squintcode.utils :refer [assoc-arr!]]))
 
 (defn fizz-buzz-pred [a b]
   (zero? (mod b a)))

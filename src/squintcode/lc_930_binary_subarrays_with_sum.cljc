@@ -1,6 +1,6 @@
 (ns squintcode.lc-930-binary-subarrays-with-sum
-  #?(:cljs (:require-macros [squintcode.macros  :as cl]))
-  #?(:clj  (:require [squintcode.macros :as cl])))
+  #?(:cljs (:require-macros [squintcode.macros :as cl])
+     :clj (:require [squintcode.macros :as cl])))
 
 (defn incf-array [arr k]
   (cl/setf (cl/aref arr k)

@@ -1,11 +1,9 @@
 (ns squintcode.hash-table-test
   (:require #?@(:squint [["assert" :as assert]]
-                :clj [[clojure.test :refer [deftest is testing run-tests]]
-                      [squintcode.macros :as cl]]
-                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]
-                       [squintcode.macros :as cl]]))
-  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests]]))
-  #?(:cljs (:require-macros [squintcode.macros :as cl])))
+                :default [[clojure.test :refer [deftest is testing run-tests]]
+                          [squintcode.macros :as cl]]))
+  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests]])
+     :cljs (:require-macros [squintcode.macros :as cl])))
 
 (deftest make-hash-table-empty-test
   (testing "make-hash-table creates empty hash table"

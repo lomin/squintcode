@@ -1,6 +1,6 @@
 (ns squintcode.maxprofit
-  #?(:cljs (:require-macros [squintcode.macros :as cl]))
-  #?(:clj  (:require [squintcode.macros :as cl])))
+  #?(:cljs (:require-macros [squintcode.macros :as cl])
+     :clj (:require [squintcode.macros :as cl])))
 
 (defn infinity []
   #?(:clj  Double/POSITIVE_INFINITY

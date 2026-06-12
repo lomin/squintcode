@@ -1,11 +1,9 @@
 (ns squintcode.setf-test
-  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests]]))
-  #?(:cljs (:require-macros [squintcode.macros :as cl]))
+  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests]])
+     :cljs (:require-macros [squintcode.macros :as cl]))
   (:require #?@(:squint [["assert" :as assert]]
-                :clj [[clojure.test :refer [deftest is testing run-tests]]
-                      [squintcode.macros :as cl]]
-                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]
-                       [squintcode.macros :as cl]])))
+                :default [[clojure.test :refer [deftest is testing run-tests]]
+                          [squintcode.macros :as cl]])))
 
 (deftest make-array-basic-test
   (testing "make-array creates array of given size"

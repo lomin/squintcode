@@ -1,11 +1,10 @@
 (ns squintcode.lc-930-binary-subarrays-with-sum-test
-  (:require #?@(:squint []
+  (:require #?@(:squint [["assert" :as assert]]
                 :clj [[clojure.test :refer [deftest is]]
                       [squintcode.macros :as cl]]
-                :cljs [[cljs.test :refer-macros [deftest is]]
+                :cljs [[clojure.test :refer [deftest is]]
                        [squintcode.leetcode-setup]])
-            [squintcode.lc-930-binary-subarrays-with-sum :refer [numSubarraysWithSum]]
-            #?(:squint ["assert" :as assert]))
+            [squintcode.lc-930-binary-subarrays-with-sum :refer [numSubarraysWithSum]])
   #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is]])
      :cljs (:require-macros [squintcode.macros :as cl])))
 

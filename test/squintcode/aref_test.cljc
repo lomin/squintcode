@@ -1,11 +1,9 @@
 (ns squintcode.aref-test
-  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests]]))
-  #?(:cljs (:require-macros [squintcode.macros :as cl]))
+  #?(:squint (:require-macros [squintcode.macros :as cl :refer [deftest is testing run-tests]])
+     :cljs (:require-macros [squintcode.macros :as cl]))
   (:require #?@(:squint [["assert" :as assert]]
-                :clj [[clojure.test :refer [deftest is testing]]
-                      [squintcode.macros :as cl]]
-                :cljs [[cljs.test :refer-macros [deftest is testing]]
-                       [squintcode.macros :as cl]])))
+                :default [[clojure.test :refer [deftest is testing]]
+                          [squintcode.macros :as cl]])))
 
 (deftest aref-basic-test
   (testing "aref accesses array/list elements"

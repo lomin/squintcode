@@ -1,6 +1,6 @@
 (ns squintcode.lc-303-range-sum-query-immutable
-  #?(:cljs (:require-macros [squintcode.macros :as cl]))
-  #?(:clj (:require [squintcode.macros :as cl])))
+  #?(:cljs (:require-macros [squintcode.macros :as cl])
+     :clj (:require [squintcode.macros :as cl])))
 
 ;; LeetCode 303: Range Sum Query - Immutable
 ;;
