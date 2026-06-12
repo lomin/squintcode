@@ -1,0 +1,29 @@
+{
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "betterthantomorrow.calva",
+                "borkdude.clj-kondo"
+            ],
+            "settings": {
+                "calva.replConnectSequences": [
+                    {
+                        "cljsType": "none",
+                        "name": "leetcode",
+                        "projectType": "deps.edn"
+                    }
+                ]
+            }
+        }
+    },
+    "name": "leetcode",
+    "postCreateCommand": "bash .devcontainer/post-create.sh",
+    "postStartCommand": "echo \"Container started.\"",
+    "remoteUser": "vscode",
+    "runArgs": [
+        "--platform=linux/arm64"
+    ]
+}

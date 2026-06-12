@@ -44,7 +44,7 @@
   {:doc "Compile macros.cljc (required dependency for all Squint code)"
    :task (do
            (println "Compiling macros.cljc...")
-           (let [result (shell {:continue true} "npx squint compile src/squintcode/macros.cljc")]
+           (let [result (shell {:continue true} "npx --no-install squint compile src/squintcode/macros.cljc")]
              (when-not (zero? (:exit result))
                (println "ERROR: Failed to compile macros.cljc")
                (System/exit 1)))
@@ -61,7 +61,7 @@
              (doseq [src sources]
                (let [name (fs/file-name src)]
                  (println (str "  Compiling " name "..."))
-                 (shell {:continue true} (str "npx squint compile " src)))))
+                 (shell {:continue true} (str "npx --no-install squint compile " src)))))
            (println "✓ Source files compiled"))}
 
   ;; ============================================================================
@@ -94,11 +94,11 @@
 
                  ;; Compile source file if it exists
                  (when (fs/exists? source-file)
-                   (shell {:continue true} (str "npx squint compile " source-file)))
+                   (shell {:continue true} (str "npx --no-install squint compile " source-file)))
 
                  ;; Compile test file
                  (let [compile-result (shell {:continue true :out :string :err :string}
-                                             (str "npx squint compile " test-file))]
+                                             (str "npx --no-install squint compile " test-file))]
                    (when-not (zero? (:exit compile-result))
                      (println "  ✗ Compilation failed")
                      (println (:err compile-result))
@@ -107,7 +107,7 @@
 
                  ;; Bundle test with esbuild
                  (let [bundle-result (shell {:continue true :out :string :err :string}
-                                            (str "npx esbuild " mjs-test
+                                            (str "npx --no-install esbuild " mjs-test
                                                  " --outfile=" bundle-file
                                                  " --format=iife --bundle --tree-shaking=true --platform=node"))]
                    (when-not (zero? (:exit bundle-result))
@@ -201,11 +201,11 @@
 
              ;; Compile macros first
              (println "Compiling macros.cljc...")
-             (shell "npx squint compile src/squintcode/macros.cljc")
+             (shell "npx --no-install squint compile src/squintcode/macros.cljc")
 
              ;; Compile source
              (println "Compiling Squint to JavaScript...")
-             (shell (str "npx squint compile " src-file))
+             (shell (str "npx --no-install squint compile " src-file))
 
              (let [mjs-file (str "out/squintcode/" problem ".mjs")
                    bundle-file (str "out/" problem ".bundle.js")
@@ -217,7 +217,7 @@
 
                ;; Bundle with esbuild
                (println "Bundling with esbuild...")
-               (shell (str "npx esbuild " mjs-file
+               (shell (str "npx --no-install esbuild " mjs-file
                            " --outfile=" bundle-file
                            " --format=esm --bundle --tree-shaking=true"))
 
