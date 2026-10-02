@@ -1,0 +1,8 @@
+{
+  "name": "probe-squint",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "squint-cljs": "0.14.210"
+  }
+}
