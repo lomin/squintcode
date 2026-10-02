@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE — generalized-place capability fidelity</title>
+<style>
+  :root{
+    --accent:#2f6fed;
+    --ink:#16181d;
+    --muted:#6b7280;
+    --line:#e5e7eb;
+    --bg:#fafbfc;
+    --card:#ffffff;
+    --clean:#0f9d58;
+    --hostgap:#7c3aed;
+    --newcap:#2563eb;
+    --hatch:#dc2626;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 80px}
+  .banner{
+    background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;
+    padding:8px 12px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:18px;
+  }
+  header h1{font-size:22px;margin:0 0 6px}
+  header p{margin:0 0 4px;color:var(--muted)}
+  .question{
+    margin-top:14px;padding:14px 16px;background:var(--card);border:1px solid var(--line);
+    border-left:4px solid var(--accent);border-radius:8px;
+  }
+  .question b{display:block;margin-bottom:4px}
+  h2{font-size:18px;margin:0 0 4px}
+  h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 8px}
+  section{margin-top:26px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px}
+  button{
+    font:inherit;background:#fff;border:1px solid var(--line);border-radius:8px;
+    padding:8px 12px;cursor:pointer;color:var(--ink);
+  }
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.done{background:#eef2ff;border-color:#c7d2fe;color:#3730a3}
+  button:disabled{opacity:.45;cursor:default}
+  .badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;color:#fff;white-space:nowrap}
+  .badge.clean{background:var(--clean)}
+  .badge.host-gap{background:var(--hostgap)}
+  .badge.new-capability{background:var(--newcap)}
+  .badge.escape-hatch{background:var(--hatch)}
+  .panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+  .kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .muted{color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  dl.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0}
+  dl.kv dt{color:var(--muted);font-size:13px}
+  dl.kv dd{margin:0;font-size:13px}
+  ul.notes{margin:0;padding-left:18px;font-size:13px}
+  ul.notes li{margin-bottom:6px}
+  .flags{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}
+  .flag{background:#f3f4f6;border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;color:#374151}
+  .hostcard{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff}
+  .hostname{font-weight:700;font-size:13px;margin-bottom:8px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+  .coderow{margin-bottom:8px}
+  .coderow .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .coderow code{display:block;background:#f8fafc;border:1px solid var(--line);border-radius:6px;padding:6px 8px;margin-top:2px;white-space:pre-wrap;word-break:break-word}
+  .coderow code.err{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
+  .engine{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .engine-row{display:flex;gap:10px;align-items:baseline;padding:8px 12px;border-bottom:1px solid var(--line);font-size:13px}
+  .engine-row:last-child{border-bottom:none}
+  .engine-row.shared{background:#f0fdf4}
+  .engine-row.host{background:#fffbeb}
+  .tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:2px 6px;border-radius:4px;flex:0 0 auto}
+  .tag.shared{background:#dcfce7;color:#166534}
+  .tag.host{background:#fef3c7;color:#92400e}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .steps{display:flex;flex-direction:column;gap:8px}
+  .step{display:flex;gap:10px;align-items:flex-start}
+  .step .num{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:#eef2ff;color:#3730a3;font-size:12px;font-weight:700;display:grid;place-items:center;margin-top:6px}
+  .hist{display:flex;flex-direction:column;gap:6px}
+  .histrow{display:grid;grid-template-columns:220px 1fr;gap:12px;align-items:center;font-size:13px}
+  .bar{height:20px;border-radius:5px;background:#e0e7ff;display:flex;align-items:center;padding:0 8px;font-size:11px;color:#3730a3;font-weight:700}
+  .bar.single{background:#fee2e2;color:#991b1b}
+  .counts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+  .count{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px}
+  .count b{font-size:18px;display:block}
+  .legend{font-size:12px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="banner">PROTOTYPE — throwaway. Not production, not wired to the real build. Delete or branch off at will.</div>
+
+  <header>
+    <h1>Generalized-place capability fidelity</h1>
+    <p class="muted">Does the “capability-first” model (Q8) survive contact with places that don’t group cleanly?</p>
+    <div class="question">
+      <b>The question</b>
+      Q8 proposes that the <em>shared, host-agnostic</em> repo route every place — <code>aref</code>, <code>gethash</code>,
+      <code>get!</code>, … — through a handful of shared <strong>mutation capabilities</strong>, with each host supplying only
+      the emitter. But some places may not group: field access (<code>get!</code> → <code>.-field</code>) addresses by a
+      <em>compile-time slot</em>, not a runtime key; list access (<code>nth</code>) is O(n);
+      some places exist on one host only. This demo pushes the vocabulary through the model and counts where it breaks.
+      <br><br>
+      <b>Watch for</b>: a place that routes cleanly anyway (no escape hatch needed) vs. one that forces a capability with a
+      single member — a “capability of one”, which is an escape hatch in disguise.
+    </div>
+  </header>
+
+  <section>
+    <h3>Current state</h3>
+    <div class="card" id="panel"></div>
+  </section>
+
+  <section>
+    <h3>Free play</h3>
+    <div class="card">
+      <p class="muted" style="margin-top:0">Click any place to route it. Add the awkward ones to see whether the shared model absorbs them.</p>
+      <div class="toolbar" id="freeplay"></div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Guided walkthroughs</h3>
+    <div class="card">
+      <div class="tabs" id="tabs"></div>
+      <p id="walkdesc" class="muted"></p>
+      <div class="steps" id="steps"></div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Sweep findings</h3>
+    <div class="card" id="findings"></div>
+    <p class="legend">A capability with exactly one member (“singleton”) is the warning sign: it means that place did <em>not</em> share its routing with anything, so the capability layer bought nothing over a bespoke per-place emitter.</p>
+  </section>
+
+</div>
+
+<script>
+/* ============================================================================
+ * PURE MODULE — capability-model fidelity
+ * Prototype. Liftable: no DOM, no document, no event handlers.
+ *
+ * Question: does a small set of shared mutation capabilities absorb the whole
+ * place vocabulary, or do some places (field access, host-only places) fall
+ * out and force a per-place escape hatch?
+ * ========================================================================== */
+
+var RUNTIME = 'runtime';        // argument is evaluated at run time
+var SLOT    = 'syntactic-slot'; // argument is a compile-time name, never evaluated
+
+/* Shared capabilities the agnostic repo would own. argKinds is the signature a
+ * place must match to route through this capability. */
+var CAPABILITIES = {
+  'indexed-mutable':  { label:'Mutable indexed collection',      argKinds:[RUNTIME,RUNTIME],
+                        note:'cell addressed by a runtime integer index' },
+  'keyed-mutable':    { label:'Mutable keyed collection (map)',  argKinds:[RUNTIME,RUNTIME],
+                        note:'entry addressed by a runtime key' },
+  'field-mutable':    { label:'Mutable object field',            argKinds:[RUNTIME,SLOT],
+                        note:'field addressed by a compile-time slot name, not a runtime value' },
+  'typed-mutable':    { label:'Mutable typed (integer) buffer',  argKinds:[RUNTIME,RUNTIME],
+                        note:'element type fixed by the underlying buffer' },
+  'slice-mutable':    { label:'Mutable contiguous slice',        argKinds:[RUNTIME,RUNTIME,RUNTIME],
+                        note:'write covers a sub-range, not a single cell' }
+};
+
+/* Per-host emitters. The ONLY host-specific code in the model. */
+var HOSTS = {
+  js: { label:'JavaScript / Squint', ops:{
+    'indexed-mutable':   { read:function(r){return '(aget '+r[0]+' '+r[1]+')';},
+                           write:function(r,v){return '(aset '+r[0]+' '+r[1]+' '+v+')';} },
+    'keyed-mutable':     { read:function(r){return '(.get '+r[0]+' '+r[1]+')';},
+                           write:function(r,v){return '(.set '+r[0]+' '+r[1]+' '+v+')';} },
+    'field-mutable':     { read:function(r){return '(.-'+r[1]+' '+r[0]+')';},
+                           write:function(r,v){return '(set! (.-'+r[1]+' '+r[0]+') '+v+')';} },
+    'typed-mutable':     { read:function(r){return '(aget '+r[0]+' '+r[1]+')';},
+                           write:function(r,v){return '(aset '+r[0]+' '+r[1]+' '+v+')';} },
+    'slice-mutable':     { read:function(r){return '(.slice '+r[0]+' '+r[1]+' '+r[2]+')';},
+                           write:function(r,v){return '(.copyWithin* '+r[0]+' '+r[1]+' '+r[2]+' '+v+')';} }
+  }},
+  jvm: { label:'JVM / Clojure', ops:{
+    'indexed-mutable':   { read:function(r){return '(nth '+r[0]+' '+r[1]+')';},
+                           write:function(r,v){return '(.set '+r[0]+' '+r[1]+' '+v+')';} },
+    'keyed-mutable':     { read:function(r){return '(.get '+r[0]+' '+r[1]+')';},
+                           write:function(r,v){return '(.put '+r[0]+' '+r[1]+' '+v+')';} },
+    'field-mutable':     { read:function(r){return '(.get (reflect-field '+r[0]+' '+r[1]+') '+r[0]+')';},
+                           write:function(r,v){return '(.set (reflect-field '+r[0]+' '+r[1]+') '+r[0]+' '+v+')';} },
+    'slice-mutable':     { read:function(r){return '(sub-list '+r[0]+' '+r[1]+' '+r[2]+')';},
+                           write:function(r,v){return '(replace-range! '+r[0]+' '+r[1]+' '+r[2]+' '+v+')';} }
+    /* no 'typed-mutable' — the JVM model has no integer-typed buffer primitive */
+  }}
+};
+
+/* The canonical place table the agnostic repo would own. */
+var BASE_PLACES = [
+  { id:'aref',    accessor:'aref',    argKinds:[RUNTIME,RUNTIME], capability:'indexed-mutable',
+    args:['arr','i'],      note:'hot path — mutable array element' },
+  { id:'gethash', accessor:'gethash', argKinds:[RUNTIME,RUNTIME], capability:'keyed-mutable',
+    args:['m','k'],        note:'hot path — mutable map entry' },
+  { id:'get!',    accessor:'get!',    argKinds:[RUNTIME,SLOT],    capability:'field-mutable',
+    args:['obj','slot'],   note:'field access — the awkward case' },
+  { id:'nth',     accessor:'nth',     argKinds:[RUNTIME,RUNTIME], capability:'indexed-mutable',
+    args:['lst','i'],      note:'indexed read; O(n) and unassignable on a linked list', onList:true }
+];
+
+/* Awkward places a host might add — used by the adversarial scenarios. */
+var EXTRA_PLACES = {
+  typed:  { id:'u32ref', accessor:'u32ref', argKinds:[RUNTIME,RUNTIME],              capability:'typed-mutable',
+            args:['u32arr','i'],       note:'typed-buffer element — present on the JS host only' },
+  slice:  { id:'subseq', accessor:'subseq', argKinds:[RUNTIME,RUNTIME,RUNTIME],      capability:'slice-mutable',
+            args:['buf','start','end'],note:'range place — write covers many cells' },
+  bespoke:{ id:'column', accessor:'column', argKinds:[RUNTIME,RUNTIME,RUNTIME],      capability:null,
+            args:['matrix','row','col'],note:'nothing in the shared model matches this shape' }
+};
+
+/* --- classify: route a place, say whether the capability model absorbs it --- */
+function classify(place, opts) {
+  opts = opts || {};
+  var res = { place:place, capability:CAPABILITIES[place.capability] || null,
+              verdict:'clean', flags:[], notes:[] };
+  var cap = res.capability;
+
+  if (!cap) {
+    res.verdict = 'escape-hatch';
+    res.flags.push('no-capability');
+    res.notes.push('No shared capability models this place shape. It needs a bespoke per-place emitter — a real escape hatch.');
+    return res;
+  }
+
+  var match = place.argKinds.length === cap.argKinds.length &&
+              place.argKinds.every(function(k,i){ return k === cap.argKinds[i]; });
+  if (!match) {
+    res.verdict = 'new-capability';
+    res.flags.push('signature-mismatch');
+    res.notes.push('The place signature does not match the capability signature, so it cannot route through it as-is.');
+    return res;
+  }
+
+  if (opts.allowLinkedLists && place.onList) {
+    res.verdict = 'escape-hatch';
+    res.flags.push('non-uniform-read','no-write');
+    res.notes.push('On a linked list the read is O(n) and there is no write, so the place is not assignable. In scope only once the mutable API is restricted to host constructors.');
+    return res;
+  }
+
+  var missing = Object.keys(HOSTS).filter(function(h){ return !HOSTS[h].ops[place.capability]; });
+  if (missing.length) {
+    res.verdict = 'host-gap';
+    res.flags.push('host-gap');
+    res.notes.push('Implemented on: ' + Object.keys(HOSTS).filter(function(h){return HOSTS[h].ops[place.capability];})
+                   .map(function(h){return HOSTS[h].label;}).join(', ') +
+                   '. Missing on: ' + missing.map(function(h){return HOSTS[h].label;}).join(', ') + '.');
+    return res;
+  }
+
+  if (place.argKinds.indexOf(SLOT) >= 0) {
+    res.flags.push('syntactic-argument');
+    res.notes.push('It DOES fit as a capability — but its second argument is a compile-time slot. The shared place table must declare that, so the shared engine splices it instead of evaluating it. No host branching needed.');
+  }
+  res.notes.push('Routes cleanly through the shared capability. Only the emitted host op is host-specific.');
+  return res;
+}
+
+/* --- the shared expansion engine: binds args once, left-to-right --- */
+function bindArgs(place, argExprs) {
+  var binds = [], refs = [];
+  place.argKinds.forEach(function(kind, i){
+    var expr = argExprs[i];
+    if (kind === SLOT) { refs.push(expr); }                 // spliced, never evaluated
+    else { var name = 't'+i; binds.push([name, expr]); refs.push(name); }
+  });
+  return { binds:binds, refs:refs };
+}
+
+function expandSetf(place, argExprs, valueExpr, hostId) {
+  var op = HOSTS[hostId].ops[place.capability];
+  if (!op || !op.write) return { ok:false, error:'place is not assignable on ' + HOSTS[hostId].label };
+  var b = bindArgs(place, argExprs);
+  b.binds.push(['v', valueExpr]);
+  var store = op.write(b.refs, 'v');
+  var letbinds = b.binds.map(function(p){ return p[0]+' '+p[1]; }).join(' ');
+  return { ok:true, binds:b.binds, refs:b.refs, store:store,
+           code:'(let ['+letbinds+'] '+store+' v)' };
+}
+
+function expandIncf(place, argExprs, deltaExpr, hostId) {
+  var op = HOSTS[hostId].ops[place.capability];
+  if (!op || !op.write || !op.read) return { ok:false, error:'place is not assignable on ' + HOSTS[hostId].label };
+  var b = bindArgs(place, argExprs);
+  var read = op.read(b.refs);
+  var store = op.write(b.refs, '(+ '+read+' '+deltaExpr+')');
+  var letbinds = b.binds.map(function(p){ return p[0]+' '+p[1]; }).join(' ');
+  return { ok:true, binds:b.binds, refs:b.refs, read:read, store:store,
+           code:'(let ['+letbinds+'] '+store+')' };
+}
+
+/* --- sweep: route the whole vocabulary and report where sharing fails --- */
+function sweep(places, opts) {
+  var rows = places.map(function(p){ return classify(p, opts); });
+  var byCap = {};
+  rows.forEach(function(r){
+    var k = r.place.capability || '(none)';
+    (byCap[k] = byCap[k] || []).push(r.place.accessor);
+  });
+  var singletons = Object.keys(byCap).filter(function(k){ return k !== '(none)' && byCap[k].length === 1; });
+  return {
+    rows:rows, byCap:byCap, singletons:singletons,
+    counts:{
+      clean:   rows.filter(function(r){return r.verdict==='clean';}).length,
+      hostgap: rows.filter(function(r){return r.verdict==='host-gap';}).length,
+      newcap:  rows.filter(function(r){return r.verdict==='new-capability';}).length,
+      hatch:   rows.filter(function(r){return r.verdict==='escape-hatch';}).length
+    }
+  };
+}
+
+var VERDICT_LABEL = {
+  'clean':'routes cleanly',
+  'host-gap':'host gap',
+  'new-capability':'needs its own capability',
+  'escape-hatch':'escape hatch required'
+};
+
+/* expose for the shell (and for the node sanity check) */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { classify:classify, sweep:sweep, expandSetf:expandSetf, expandIncf:expandIncf,
+                     BASE_PLACES:BASE_PLACES, EXTRA_PLACES:EXTRA_PLACES, CAPABILITIES:CAPABILITIES,
+                     HOSTS:HOSTS, RUNTIME:RUNTIME, SLOT:SLOT };
+}
+</script>
+
+<script>
+/* ============================================================================
+ * SHELL — throwaway page around the pure module. Mutates `app`, then renders.
+ * ========================================================================== */
+
+var app = {
+  placeId:'aref', argExprs:null, valueExpr:'v', deltaExpr:'1',
+  allowLinkedLists:false, misrouteField:false,
+  extras:[], lastSweep:null, walkId:null, stepIndex:0
+};
+
+function allPlaces(){ return BASE_PLACES.concat(app.extras); }
+function currentPlace(){
+  var p = allPlaces().filter(function(x){return x.id===app.placeId;})[0] || BASE_PLACES[0];
+  if (app.misrouteField && p.id === 'get!') {
+    p = { id:p.id, accessor:p.accessor, argKinds:[RUNTIME,RUNTIME], capability:p.capability,
+          args:p.args, note:p.note + ' (slot mis-declared as a runtime value)' };
+  }
+  return p;
+}
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function kindLabel(k){ return k === SLOT ? 'slot' : 'runtime'; }
+
+/* ---------- actions (mutate app; caller renders) ---------- */
+function focusPlace(id, opts){
+  opts = opts || {};
+  app.placeId = id;
+  app.argExprs = opts.argExprs || null;
+  app.valueExpr = opts.valueExpr || 'v';
+  app.deltaExpr = opts.deltaExpr || '1';
+  if (opts.misroute !== undefined) app.misrouteField = opts.misroute;
+}
+function addExtra(key){
+  if (!app.extras.some(function(p){return p.id===EXTRA_PLACES[key].id;})) app.extras.push(EXTRA_PLACES[key]);
+  focusPlace(EXTRA_PLACES[key].id);
+}
+function toggleLinkedLists(){ app.allowLinkedLists = !app.allowLinkedLists; }
+function setMisroute(v){ app.misrouteField = v; }
+function resetApp(){
+  app.placeId='aref'; app.argExprs=null; app.valueExpr='v'; app.deltaExpr='1';
+  app.allowLinkedLists=false; app.misrouteField=false; app.extras=[];
+}
+function sweepNow(){
+  app.lastSweep = sweep(allPlaces(), { allowLinkedLists: app.allowLinkedLists });
+}
+
+/* ---------- panel ---------- */
+function codeRow(label, res){
+  if (!res.ok) return '<div class="coderow"><span class="lbl">'+esc(label)+'</span><code class="err">'+esc(res.error)+'</code></div>';
+  return '<div class="coderow"><span class="lbl">'+esc(label)+'</span><code>'+esc(res.code)+'</code></div>';
+}
+
+function renderPanel(){
+  var place = currentPlace();
+  var cls = classify(place, { allowLinkedLists: app.allowLinkedLists });
+  var args = app.argExprs || place.args;
+  var hostIds = Object.keys(HOSTS);
+  var setf = {}, incf = {};
+  hostIds.forEach(function(h){
+    setf[h] = expandSetf(place, args, app.valueExpr, h);
+    incf[h] = expandIncf(place, args, app.deltaExpr, h);
+  });
+  var form = '(' + place.accessor + ' ' + args.join(' ') + ')';
+
+  var html = '';
+  html += '<div class="panel-head"><div>'
+        + '<span class="kicker">Place under analysis</span>'
+        + '<h2>' + esc(form) + '</h2>'
+        + '<p class="muted" style="margin:0">' + esc(place.note || '') + '</p>'
+        + '</div><span class="badge ' + cls.verdict + '">' + esc(VERDICT_LABEL[cls.verdict]) + '</span></div>';
+
+  html += '<div class="grid2">';
+  html += '<div><h3>Routing</h3><dl class="kv">'
+        + '<dt>Capability</dt><dd>' + (cls.capability ? esc(cls.capability.label) : '<em class="muted">none</em>') + '</dd>'
+        + '<dt>Place signature</dt><dd>' + place.argKinds.map(kindLabel).join(' , ') + '</dd>'
+        + '<dt>Capability signature</dt><dd>' + (cls.capability ? cls.capability.argKinds.map(kindLabel).join(' , ') : '—') + '</dd>'
+        + '</dl></div>';
+  html += '<div><h3>Why</h3><ul class="notes">';
+  cls.notes.forEach(function(n){ html += '<li>' + esc(n) + '</li>'; });
+  html += '</ul>';
+  if (cls.flags.length) html += '<div class="flags">' + cls.flags.map(function(f){return '<span class="flag">'+esc(f)+'</span>';}).join('') + '</div>';
+  html += '</div></div>';
+
+  html += '<h3>Emitted code</h3><div class="grid2">';
+  hostIds.forEach(function(h){
+    html += '<div class="hostcard"><div class="hostname">' + esc(HOSTS[h].label) + '</div>'
+          + codeRow('setf!', setf[h]) + codeRow('incf!', incf[h]) + '</div>';
+  });
+  html += '</div>';
+
+  var ex = setf.js.ok ? setf.js : setf.jvm;
+  if (ex.ok) {
+    html += '<h3>What is shared vs. what is host-specific</h3><div class="engine">';
+    html += '<div class="engine-row shared"><span class="tag shared">shared</span> evaluate place arguments left-to-right, exactly once: '
+          + esc(ex.binds.filter(function(b){return b[0]!=='v';}).map(function(b){return b[0]+' ← '+b[1];}).join(', ') || '(none)') + '</div>';
+    html += '<div class="engine-row shared"><span class="tag shared">shared</span> evaluate the value last: ' + esc('v ← ' + app.valueExpr) + '</div>';
+    hostIds.forEach(function(h){
+      var r = setf[h];
+      html += '<div class="engine-row host"><span class="tag host">host</span> store → ' + esc(HOSTS[h].label) + ': <code>'
+            + esc(r.ok ? r.store : ('error: ' + r.error)) + '</code></div>';
+    });
+    html += '<div class="engine-row shared"><span class="tag shared">shared</span> return the stored value</div>';
+    html += '</div>';
+  }
+
+  document.getElementById('panel').innerHTML = html;
+}
+
+/* ---------- free play ---------- */
+function renderFreeplay(){
+  var html = '';
+  allPlaces().forEach(function(p){
+    html += '<button class="' + (p.id===app.placeId ? 'active' : '') + '" onclick="focusPlace(\'' + p.id + '\');render();">' + esc(p.accessor) + '</button>';
+  });
+  html += '<span style="width:100%"></span>';
+  html += '<button onclick="addExtra(\'typed\');render();">+ add a typed-buffer place</button>';
+  html += '<button onclick="addExtra(\'slice\');render();">+ add a slice place</button>';
+  html += '<button onclick="addExtra(\'bespoke\');render();">+ add a place nothing models</button>';
+  html += '<button class="' + (app.allowLinkedLists ? 'active':'') + '" onclick="toggleLinkedLists();render();">linked lists allowed: ' + (app.allowLinkedLists?'ON':'OFF') + '</button>';
+  html += '<button class="' + (app.misrouteField ? 'active':'') + '" onclick="setMisroute(!app.misrouteField);focusPlace(\'get!\');render();">mis-declare get! slot as a runtime value</button>';
+  html += '<button onclick="sweepNow();render();">▶ sweep the whole vocabulary</button>';
+  document.getElementById('freeplay').innerHTML = html;
+}
+
+/* ---------- findings ---------- */
+function renderFindings(){
+  var el = document.getElementById('findings');
+  if (!app.lastSweep) {
+    el.innerHTML = '<p class="muted" style="margin:0">Press “sweep the whole vocabulary” to route every place and count where sharing fails.</p>';
+    return;
+  }
+  var s = app.lastSweep;
+  var html = '<div class="counts">'
+    + '<div class="count"><b>' + s.counts.clean + '</b> route cleanly</div>'
+    + '<div class="count"><b>' + s.counts.hostgap + '</b> host gaps</div>'
+    + '<div class="count"><b>' + s.counts.newcap + '</b> need own capability</div>'
+    + '<div class="count"><b>' + s.counts.hatch + '</b> escape hatches</div>'
+    + '</div>';
+  html += '<h3>Capabilities by membership</h3><div class="hist">';
+  Object.keys(s.byCap).forEach(function(k){
+    var members = s.byCap[k];
+    var label = k === '(none)' ? '(no capability)' : CAPABILITIES[k].label;
+    var single = s.singletons.indexOf(k) >= 0;
+    html += '<div class="histrow"><div>' + esc(label) + '</div>'
+          + '<div class="bar' + (single?' single':'') + '">' + esc(members.join(', ')) + (single ? '  ⚠ capability of one' : '') + '</div></div>';
+  });
+  html += '</div>';
+  if (s.singletons.length) {
+    html += '<p class="legend">Capabilities of one: <b>' + esc(s.singletons.join(', ')) + '</b>. '
+          + 'These places do not share their routing with anything else, so the capability layer is a formality — an escape hatch with extra steps.</p>';
+  }
+  el.innerHTML = html;
+}
+
+/* ---------- walkthroughs ---------- */
+var WALKTHROUGHS = [
+  { id:'happy', title:'1 · The happy path', desc:'Indexed and keyed places are the hot path. Watch them route cleanly and emit direct host ops — no runtime hop.', steps:[
+    { label:'Route `aref` — a mutable array element', run:function(){ focusPlace('aref'); } },
+    { label:'Route `gethash` — a mutable map entry', run:function(){ focusPlace('gethash'); } },
+    { label:'Sweep: how much of the vocabulary is clean?', run:function(){ sweepNow(); } }
+  ]},
+  { id:'field', title:'2 · Field access', desc:'`get!` addresses by a compile-time slot, not a runtime key. Does that break the capability model?', steps:[
+    { label:'Route `get!` and read the flag', run:function(){ setMisroute(false); focusPlace('get!'); } },
+    { label:'Mis-declare the slot as a runtime value', run:function(){ setMisroute(true); focusPlace('get!'); } },
+    { label:'Sweep with `get!` back to normal', run:function(){ setMisroute(false); focusPlace('get!'); sweepNow(); } }
+  ]},
+  { id:'list', title:'3 · Sequence access', desc:'`nth` — an O(n) read that is unassignable on a linked list. Its verdict depends on how far the mutable API is restricted.', steps:[
+    { label:'Route `nth` with linked lists out of scope', run:function(){ app.allowLinkedLists=false; focusPlace('nth'); } },
+    { label:'Allow linked lists and re-check `nth`', run:function(){ app.allowLinkedLists=true; focusPlace('nth'); } },
+    { label:'Sweep in that wider scope', run:function(){ sweepNow(); } }
+  ]},
+  { id:'adversarial', title:'4 · Adversarial places', desc:'Add places that the vocabulary might grow to include and see which the shared model absorbs.', steps:[
+    { label:'Add a typed-buffer place (JS-only)', run:function(){ app.allowLinkedLists=false; addExtra('typed'); } },
+    { label:'Add a slice place (many cells per write)', run:function(){ addExtra('slice'); } },
+    { label:'Add a place nothing models', run:function(){ addExtra('bespoke'); } },
+    { label:'Sweep: which capabilities-of-one appeared?', run:function(){ sweepNow(); } }
+  ]},
+  { id:'order', title:'5 · Nested places & evaluation order', desc:'The shared engine must bind arguments once, left-to-right, and evaluate the value last — regardless of capability.', steps:[
+    { label:'`(setf! (aref (gethash m k) (f)) (g x))`', run:function(){ app.allowLinkedLists=false; focusPlace('aref',{argExprs:['(gethash m k)','(f)'],valueExpr:'(g x)'}); } },
+    { label:'`(setf! (gethash (get! obj slot) (k)) v)`', run:function(){ focusPlace('gethash',{argExprs:['(get! obj slot)','(k)']}); } },
+    { label:'`(incf! (get! obj slot))` — read then write', run:function(){ focusPlace('get!',{argExprs:['obj','slot'],deltaExpr:'1'}); } }
+  ]}
+];
+
+function renderTabs(){
+  var html = '';
+  WALKTHROUGHS.forEach(function(w){
+    html += '<button class="' + (app.walkId===w.id ? 'active':'') + '" onclick="startWalk(\'' + w.id + '\');">' + esc(w.title) + '</button>';
+  });
+  document.getElementById('tabs').innerHTML = html;
+  var w = WALKTHROUGHS.filter(function(x){return x.id===app.walkId;})[0];
+  document.getElementById('walkdesc').textContent = w ? w.desc : 'Pick a walkthrough to run the awkward cases step by step.';
+  var stepsEl = document.getElementById('steps');
+  if (!w) { stepsEl.innerHTML = ''; return; }
+  var sh = '';
+  w.steps.forEach(function(s, i){
+    var done = i < app.stepIndex;
+    var enabled = i === app.stepIndex;
+    sh += '<div class="step"><div class="num">' + (i+1) + '</div>'
+        + '<button class="' + (done?'done':'') + '" ' + (enabled||done?'':'disabled') + ' '
+        + 'onclick="runStep(' + i + ');">' + esc(s.label) + '</button></div>';
+  });
+  stepsEl.innerHTML = sh;
+}
+
+function startWalk(id){ resetApp(); app.walkId = id; app.stepIndex = 0; render(); }
+function runStep(i){
+  var w = WALKTHROUGHS.filter(function(x){return x.id===app.walkId;})[0];
+  if (!w || i !== app.stepIndex) return;
+  w.steps[i].run();
+  app.stepIndex = i + 1;
+  render();
+}
+
+/* ---------- render ---------- */
+function render(){ renderPanel(); renderFreeplay(); renderFindings(); renderTabs(); }
+render();
+</script>
+</body>
+</html>

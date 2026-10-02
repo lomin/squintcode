@@ -1,0 +1,2 @@
+{:paths ["shared" "app" "backends/jvm"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}}}

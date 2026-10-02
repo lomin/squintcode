@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROTOTYPE — what each target can actually see</title>
+<style>
+  :root{
+    --ink:#16181d; --muted:#6b7280; --line:#e5e7eb; --bg:#fafbfc; --card:#fff;
+    --accent:#2f6fed; --ok:#0f9d58; --warn:#b45309; --bad:#dc2626; --none:#6b7280;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1020px;margin:0 auto;padding:28px 20px 80px}
+  .banner{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;padding:8px 12px;
+    border-radius:8px;font-size:13px;font-weight:600;margin-bottom:18px}
+  header h1{font-size:22px;margin:0 0 6px}
+  header p{margin:0 0 4px;color:var(--muted)}
+  .question{margin-top:14px;padding:14px 16px;background:var(--card);border:1px solid var(--line);
+    border-left:4px solid var(--accent);border-radius:8px}
+  .question b{display:block;margin-bottom:4px}
+  h2{font-size:18px;margin:0 0 4px}
+  h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:18px 0 8px}
+  section{margin-top:26px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px}
+  button{font:inherit;background:#fff;border:1px solid var(--line);border-radius:8px;
+    padding:8px 12px;cursor:pointer;color:var(--ink)}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.done{background:#eef2ff;border-color:#c7d2fe;color:#3730a3}
+  button:disabled{opacity:.45;cursor:default}
+  .badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap}
+  .b-ok{background:var(--ok)} .b-macro-not-found{background:var(--bad)}
+  .b-no-runtime-ns{background:var(--warn)} .b-not-observed{background:var(--none)}
+  .b-unseen{background:#9ca3af}
+  .panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+  .kicker{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .muted{color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  dl.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0}
+  dl.kv dt{color:var(--muted);font-size:13px}
+  dl.kv dd{margin:0;font-size:13px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+  th{background:#f8fafc;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  td.num{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .cmp{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:6px}
+  @media(max-width:760px){.cmp{grid-template-columns:1fr}}
+  .cell{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff}
+  .cell h4{margin:0 0 8px;font-size:13px}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:8px;
+    padding:5px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .row:last-child{border-bottom:none}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .steps{display:flex;flex-direction:column;gap:8px}
+  .step{display:flex;gap:10px;align-items:flex-start}
+  .step .num{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:#eef2ff;color:#3730a3;
+    font-size:12px;font-weight:700;display:grid;place-items:center;margin-top:6px}
+  .takeaway{background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid var(--accent);
+    border-radius:8px;padding:12px 14px;font-size:14px}
+  .takeaway b{display:block;margin-bottom:4px}
+  ul.notes{margin:0;padding-left:18px;font-size:13px}
+  ul.notes li{margin-bottom:6px}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+  .legend{font-size:12px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="banner">PROTOTYPE — throwaway. Not production, not wired to the real build. Delete or branch off at will.</div>
+
+  <header>
+    <h1>What each target can actually see</h1>
+    <p class="muted">Namespace + macro resolution matrix for Clojure, ClojureScript and Squint.</p>
+    <div class="question">
+      <b>The question</b>
+      Can one <em>shared</em> facade namespace be backed by a different implementation per target, with
+      <em>byte-identical</em> portable application code calling it? Before we can argue about where backend
+      selection is allowed to live, we have to know what each compiler is even capable of <strong>seeing</strong>:
+      which file extensions it reads, and whether it finds a macro without being told explicitly.
+      <br><br>
+      <b>How to read this page</b> Every verdict is shown twice: <code>OBSERVED</code> is what a real compiler
+      actually did (ClojureScript 1.12.42, Squint 0.14.210). <code>MODEL</code> is what this page's little rule
+      engine predicts. <strong>Where the two disagree, the model is wrong</strong> — that is the interesting cell.
+      Cells marked “not observed” were never actually run.
+    </div>
+  </header>
+
+  <section>
+    <h3>Current state</h3>
+    <div class="card" id="panel"></div>
+  </section>
+
+  <section>
+    <h3>Free play</h3>
+    <div class="card">
+      <p class="muted" style="margin-top:0">Pick any namespace shape and any way the consumer reaches the macro.</p>
+      <div class="toolbar" id="freeplay"></div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Guided walkthroughs</h3>
+    <div class="card">
+      <div class="tabs" id="tabs"></div>
+      <p id="walkdesc" class="muted"></p>
+      <div class="steps" id="steps"></div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Full observed matrix</h3>
+    <div class="card" id="matrix"></div>
+    <p class="legend">Every row below is a real compile. Nothing in this table is simulated.</p>
+  </section>
+
+</div>
+
+<script>
+/* ============================================================================
+ * PURE MODULE — resolution rules + the observed evidence table.
+ * Liftable: no DOM, no document, no event handlers.
+ *
+ * Two independent things live here on purpose:
+ *   TARGETS  = a small rule model of what each compiler can see
+ *   CASES    = what the compilers were actually observed to do
+ * `compare()` puts them side by side so a disagreement is visible.
+ * ========================================================================== */
+
+/* --- the rule model (simulated) --- */
+var TARGETS = {
+  clojure: { label:'Clojure / JVM', ext:'JVM',
+             runtimeExts:['.clj','.cljc'], macroExts:['.clj','.cljc'],
+             implicitMacro:true,  howMacrosArrive:'the macro IS the namespace (no separate require)',
+             silentFailure:false },
+  cljs:    { label:'ClojureScript', ext:'JS',
+             runtimeExts:['.cljs','.cljc'], macroExts:['.clj','.cljc'],
+             implicitMacro:false, howMacrosArrive:':refer-macros / :require-macros, explicitly',
+             silentFailure:true },
+  squint:  { label:'Squint', ext:'JS',
+             runtimeExts:['.cljs','.cljc'], macroExts:['.cljc'],
+             implicitMacro:true,  howMacrosArrive:'implicitly, from a .cljc macro half',
+             silentFailure:true }
+};
+
+/* verdicts */
+var OK='ok', MACRO_NOT_FOUND='macro-not-found', NO_RUNTIME_NS='no-runtime-ns';
+
+var VERDICT_TEXT = {
+  'ok':'works — macro expanded at compile time',
+  'macro-not-found':'macro NOT found — compiles anyway, emits a broken run-time call',
+  'no-runtime-ns':'namespace not found at all — hard compile error'
+};
+
+/* --- the rule model: predict a verdict --- */
+function predict(targetId, shape, link) {
+  var t = TARGETS[targetId];
+  /* a macro-only namespace has no separate runtime file: its only file IS the macro file */
+  var rt = shape.runtimeExt || shape.macroExt;
+  /* resolving the consumer's require comes BEFORE looking for any macro */
+  if (t.runtimeExts.indexOf(rt) < 0)
+    return { verdict:NO_RUNTIME_NS,
+             why:'The consumer requires this namespace, but its file is ' + rt +
+                ', and at run time this target only reads ' + t.runtimeExts.join(' / ') + '.' };
+  if (t.macroExts.indexOf(shape.macroExt) < 0)
+    return { verdict:MACRO_NOT_FOUND,
+             why:'This target does not read ' + shape.macroExt + ' files for macros at all, so there is nothing to find.' };
+  if (link === 'explicit') return { verdict:OK, why:'The consumer asks for the macro by name, so it is found.' };
+  if (t.implicitMacro)  return { verdict:OK, why:'This target finds the macro on its own.' };
+  return { verdict:MACRO_NOT_FOUND,
+           why:'This target does not look for macros implicitly, so an unqualified require leaves it unfound.' +
+              (t.silentFailure ? ' It warns but keeps compiling.' : '') };
+}
+
+/* --- the evidence: real compiles (null = never actually run) --- */
+var CASES = [
+  { id:'c1', label:'macro half .clj, runtime half .clj',
+    note:'One file, plain Clojure shape.',
+    shape:{ macroExt:'.clj', runtimeExt:'.clj' }, link:'implicit',
+    observed:{ clojure:OK, cljs:null, squint:null } },
+
+  { id:'c2', label:'macro-only namespace in .clj',
+    note:'No run-time vars at all.',
+    shape:{ macroExt:'.clj', runtimeExt:null }, link:'implicit',
+    observed:{ clojure:null, cljs:NO_RUNTIME_NS, squint:null } },
+
+  { id:'c3', label:'macro half .cljc, runtime half .cljs',
+    note:'The shape a two-target facade would need.',
+    shape:{ macroExt:'.cljc', runtimeExt:'.cljs' }, link:'implicit',
+    observed:{ clojure:null, cljs:MACRO_NOT_FOUND, squint:OK } },
+
+  { id:'c4', label:'macro half .cljc, runtime half .cljs, explicit macro require',
+    note:'Same files, consumer names the macro.',
+    shape:{ macroExt:'.cljc', runtimeExt:'.cljs' }, link:'explicit',
+    observed:{ clojure:null, cljs:OK, squint:OK } },
+
+  { id:'c5', label:'macro half .clj, runtime half .cljs',
+    note:'Squint does not read .clj at all.',
+    shape:{ macroExt:'.clj', runtimeExt:'.cljs' }, link:'implicit',
+    observed:{ clojure:null, cljs:MACRO_NOT_FOUND, squint:MACRO_NOT_FOUND } },
+
+  { id:'c6', label:'both halves in one .cljc, explicit macro require',
+    note:'Simplest thing that works everywhere.',
+    shape:{ macroExt:'.cljc', runtimeExt:'.cljc' }, link:'explicit',
+    observed:{ clojure:null, cljs:null, squint:OK } }
+];
+
+/* --- put observation and model side by side --- */
+function compare(caseId, targetId) {
+  var c = CASES.filter(function(x){return x.id===caseId;})[0];
+  var obs = c.observed[targetId];
+  var pred = predict(targetId, c.shape, c.link);
+  var agrees = (obs === null) ? null : (obs === pred.verdict);
+  return { caseDef:c, targetId:targetId, target:TARGETS[targetId],
+           observed:obs, predicted:pred, agrees:agrees };
+}
+
+function compareAll(caseId) {
+  return Object.keys(TARGETS).map(function(t){ return compare(caseId, t); });
+}
+
+/* what a consumer has to write to get a macro, per target */
+function consumerNote(targetId, link) {
+  var t = TARGETS[targetId];
+  if (targetId === 'clojure')
+    return link === 'implicit' ? '(:require [facade.api :as f])  then (f/set! …)'
+                              : '(:require [facade.api :as f])  then (f/set! …)   — no difference';
+  if (link === 'explicit')
+    return '(:require [facade.api :as f] [facade.api :refer-macros [set!]])  then (f/set! …)';
+  return '(:require [facade.api :as f])  then (f/set! …)' + (t.implicitMacro ? '   — works implicitly' : '   — FAILS');
+}
+
+/* the headline consequence, derived from the table rather than hardcoded */
+function consequences() {
+  var macroExts = Object.keys(TARGETS).map(function(t){ return TARGETS[t].macroExts; });
+  var commonMacroExt = ['.clj','.cljc'].filter(function(e){
+    return macroExts.every(function(list){ return list.indexOf(e) >= 0; });
+  });
+  var implicitUsers = Object.keys(TARGETS).filter(function(t){ return TARGETS[t].implicitMacro; });
+  var explicitUsers = Object.keys(TARGETS).filter(function(t){ return !TARGETS[t].implicitMacro; });
+  var silentUsers  = Object.keys(TARGETS).filter(function(t){ return TARGETS[t].silentFailure; });
+  return { commonMacroExt:commonMacroExt, implicitUsers:implicitUsers,
+           explicitUsers:explicitUsers, silentUsers:silentUsers,
+           identical: implicitUsers.length === 0 || explicitUsers.length === 0 };
+}
+
+/* expose for the shell */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { TARGETS:TARGETS, CASES:CASES, predict:predict, compare:compare,
+                     compareAll:compareAll, consequences:consequences, consumerNote:consumerNote,
+                     VERDICT_TEXT:VERDICT_TEXT };
+}
+</script>
+
+<script>
+/* ============================================================================
+ * SHELL — throwaway page. Mutates `app`, then renders.
+ * ========================================================================== */
+
+var app = { caseId:'c3', walkId:null, stepIndex:0 };
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function badge(v){
+  if (v === null) return '<span class="badge b-unseen">not observed</span>';
+  return '<span class="badge b-'+v+'">'+esc(v)+'</span>';
+}
+function pickCase(id){ app.caseId = id; }
+function startWalk(id){ app.walkId = id; app.stepIndex = 0; render(); }
+function runStep(i){
+  var w = WALKTHROUGHS.filter(function(x){return x.id===app.walkId;})[0];
+  if (!w || i !== app.stepIndex) return;
+  w.steps[i].run(); app.stepIndex = i + 1; render();
+}
+
+function renderPanel(){
+  var rows = compareAll(app.caseId);
+  var c = rows[0].caseDef;
+  var cons = consequences();
+
+  var html = '';
+  html += '<div class="panel-head"><div>'
+        + '<span class="kicker">Namespace shape under test</span>'
+        + '<h2>' + esc(c.label) + '</h2>'
+        + '<p class="muted" style="margin:0">' + esc(c.note) + '</p>'
+        + '</div></div>';
+
+  html += '<h3>What each target does with it</h3><div class="cmp">';
+  rows.forEach(function(r){
+    html += '<div class="cell"><h4>' + esc(r.target.label) + ' <span class="muted">(' + r.target.ext + ')</span></h4>';
+    html += '<div class="row"><span>observed</span>' + badge(r.observed) + '</div>';
+    html += '<div class="row"><span>model predicts</span>' + badge(r.predicted.verdict) + '</div>';
+    html += '<div class="row"><span>agreement</span><span>' +
+            (r.agrees === null ? '<span class="muted">nothing to compare</span>'
+                               : (r.agrees ? '<b style="color:var(--ok)">agree</b>'
+                                           : '<b style="color:var(--bad)">MODEL IS WRONG</b>')) +
+            '</span></div>';
+    html += '<p class="legend">' + esc(consumerNote(r.targetId, c.link)) + '</p>';
+    html += '</div>';
+  });
+  html += '</div>';
+
+  html += '<h3>Why the model says so</h3><div class="grid2">';
+  rows.forEach(function(r){
+    html += '<div><b>' + esc(r.target.label) + '</b><ul class="notes"><li>' +
+            esc(r.predicted.why) + '</li><li>macros arrive: ' + esc(r.target.howMacrosArrive) + '</li></ul></div>';
+  });
+  html += '</div>';
+
+  html += '<h3>Consequence that falls out of the table</h3><div class="takeaway">';
+  html += '<b>Can portable consumer code be identical on all three targets?</b>';
+  if (cons.identical) {
+    html += 'Yes — every target reaches the macro the same way.';
+  } else {
+    html += "No. " + cons.implicitUsers.length + " of the targets (" + cons.implicitUsers.join(", ") +
+            ") find the macro on their own; " + cons.explicitUsers.length + " (" + cons.explicitUsers.join(", ") +
+            ") insist that the consumer name it explicitly. One consumer source cannot serve both. ";
+    html += "A macro-based facade therefore forces target-specific require syntax into portable code, no " +
+            "matter where the backend is selected. " + cons.silentUsers.length + " of these targets (" +
+            cons.silentUsers.join(", ") + ") only WARN when the macro is missing, so the break surfaces at " +
+            "run time rather than at build time.";
+  }
+  html += '<div class="legend">Only <code>' + esc(cons.commonMacroExt.join(' and ') || 'none') +
+          '</code> is read as a macro source by every target.</div>';
+  html += '</div>';
+
+  document.getElementById('panel').innerHTML = html;
+}
+
+function renderFreeplay(){
+  var html = '';
+  CASES.forEach(function(c){
+    html += '<button class="' + (c.id===app.caseId ? 'active':'') + '" onclick="pickCase(\'' + c.id +
+            '\');render();">' + esc(c.label) + '</button>';
+  });
+  document.getElementById('freeplay').innerHTML = html;
+}
+
+var WALKTHROUGHS = [
+  { id:'see', title:'1 · The targets do not see the same files', desc:'Squint never reads a .clj file. ClojureScript never sees a .clj namespace at run time. Start with the plain shapes.', steps:[
+    { label:'One plain .clj file — the shape Clojure likes', run:function(){ pickCase('c1'); } },
+    { label:'A macro-only .clj namespace — ClojureScript cannot even see it', run:function(){ pickCase('c2'); } },
+    { label:'A .clj macro half paired with a .cljs runtime half', run:function(){ pickCase('c5'); } }
+  ]},
+  { id:'macros', title:'2 · How the macro gets found', desc:'Same files, different consumer. Squint finds the macro on its own; ClojureScript only when asked.', steps:[
+    { label:'Implicitly — Squint works, ClojureScript does not', run:function(){ pickCase('c3'); } },
+    { label:'Explicitly — both work', run:function(){ pickCase('c4'); } },
+    { label:'One plain .cljc file, explicit require — the simplest shape that works everywhere', run:function(){ pickCase('c6'); } }
+  ]},
+  { id:'silent', title:'3 · The failure you would not see', desc:'Why the ClojureScript column is the dangerous one.', steps:[
+    { label:'Look at the implicit macro case again', run:function(){ pickCase('c3'); } },
+    { label:'Note the observed verdict: a WARNING, not an error', run:function(){} }
+  ]},
+  { id:'model', title:'4 · Model versus observation', desc:'Cells marked “not observed” were never run. Where an observation exists, check whether the rule engine agrees.', steps:[
+    { label:'Start on a fully observed row', run:function(){ pickCase('c3'); } },
+    { label:'Move to the row that is only half observed', run:function(){ pickCase('c6'); } },
+    { label:'Back to the row where both targets agree', run:function(){ pickCase('c4'); } }
+  ]},
+  { id:'so', title:'5 · What it means for the design', desc:'Read the consequence box out loud on each case.', steps:[
+    { label:'Implicit macro case', run:function(){ pickCase('c3'); } },
+    { label:'Explicit macro case', run:function(){ pickCase('c4'); } }
+  ]}
+];
+
+function renderTabs(){
+  var html = '';
+  WALKTHROUGHS.forEach(function(w){
+    html += '<button class="' + (app.walkId===w.id ? 'active':'') + '" onclick="startWalk(\'' + w.id + '\');">' +
+            esc(w.title) + '</button>';
+  });
+  document.getElementById('tabs').innerHTML = html;
+  var w = WALKTHROUGHS.filter(function(x){return x.id===app.walkId;})[0];
+  document.getElementById('walkdesc').textContent = w ? w.desc : 'Pick a walkthrough to run the cases step by step.';
+  var stepsEl = document.getElementById('steps');
+  if (!w) { stepsEl.innerHTML = ''; return; }
+  var sh = '';
+  w.steps.forEach(function(s,i){
+    var done = i < app.stepIndex, enabled = i === app.stepIndex;
+    sh += '<div class="step"><div class="num">' + (i+1) + '</div>'
+        + '<button class="' + (done?'done':'') + '" ' + (enabled||done?'':'disabled') + ' '
+        + 'onclick="runStep(' + i + ');">' + esc(s.label) + '</button></div>';
+  });
+  stepsEl.innerHTML = sh;
+}
+
+function renderMatrix(){
+  var html = '<table><tr><th>namespace shape</th><th>macro reach</th>'
+           + Object.keys(TARGETS).map(function(t){
+               return '<th>' + esc(TARGETS[t].label) + '</th>'; }).join('')
+           + '</tr>';
+  CASES.forEach(function(c){
+    html += '<tr><td>' + esc(c.label) + '</td><td>' + esc(c.link) + '</td>';
+    Object.keys(TARGETS).forEach(function(t){
+      var v = c.observed[t];
+      html += '<td>' + (v === null ? '<span class="muted">not observed</span>' : esc(v)) + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</table>';
+  document.getElementById('matrix').innerHTML = html;
+}
+
+function render(){ renderPanel(); renderFreeplay(); renderTabs(); renderMatrix(); }
+render();
+</script>
+</body>
+</html>
