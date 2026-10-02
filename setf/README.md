@@ -17,9 +17,12 @@ on a measurement, it says so.
 allocation; no protocol layer.
 
 ```clojure
+(elt a 1)                   ; JVM  (.get ^java.util.List t0 t1)
 (setf! (elt a 1) 99)        ; JVM  (.set ^java.util.List t0 t1 v)
 (incf! (elt a 1))           ; JS   t0[t1] = (t0[t1] + 1)
+(gethash m "k")             ; JS   t0.get(t1)
 (setf! (gethash m "k") 7)    ; JS   t0.set(t1, v)
+(get! o x)                  ; JS   t0.x
 (setf! (get! o x) 42)        ; JS   t0.x = v
 (decf! (elt a 1) 10)
 ```
@@ -138,6 +141,9 @@ check — and it is the accepted cost of the design.
 
 | form | meaning |
 |---|---|
+| `(elt coll i)` | the element at index `i` |
+| `(gethash m k)` | the value at key `k` |
+| `(get! o field)` | the field `field` |
 | `(setf! (elt coll i) v)` | assign the element at index `i` |
 | `(setf! (gethash m k) v)` | assign the value at key `k` |
 | `(setf! (get! o field) v)` | assign the field `field` |
@@ -145,19 +151,29 @@ check — and it is the accepted cost of the design.
 | `(decf! place)` / `(decf! place delta)` | subtract, in place |
 
 Every form evaluates to the value it just stored. Every runtime argument is
-evaluated **exactly once**, left to right, however compound it is.
+evaluated **exactly once**, left to right, however compound it is — on the write
+path and on the read path both.
 
-`elt` / `gethash` / `get!` are *place names*: they denote semantics, not a
-function to call, and they are not resolved against `clojure.core`. Each host
-emits its fastest form with those semantics.
+`elt` / `gethash` / `get!` are *place names*, and each is an **accessor pair**:
+one name, both directions. `(elt coll i)` reads; `(setf! (elt coll i) v)` writes.
+`setf!` consumes the place form in head position and never expands it, so the two
+directions never interfere. A place name is a **macro**, not a function, because a
+read has to be able to attach whatever the host needs to emit its fastest access —
+a JVM read carries a `^java.util.List` hint, and no function can. The cost is that
+a place name cannot be passed by value, so `(map elt xs)` is not a thing.
+
+Place names denote *semantics*, not the function they are named after, and are not
+resolved against `clojure.core` — `clojure.core/elt` does not exist. Each host
+emits its fastest form with those semantics: a JVM `elt` is
+`(.get ^java.util.List coll i)`, O(1), not an O(n) sequence walk.
 
 ## 6. What a client pays
 
 One require clause, two branches:
 
 ```clojure
-(:require #?(:clj  [setf.api :as api :refer [setf! incf! decf!]]
-             :cljs [setf.api :as api :refer-macros [setf! incf! decf!]]))
+(:require #?(:clj  [setf.api :as api :refer [setf! incf! decf! elt gethash get!]]
+             :cljs [setf.api :as api :refer-macros [setf! incf! decf! elt gethash get!]]))
 ```
 
 That is the entire per-target cost, and it is the *measured* price of the macro
@@ -181,8 +197,10 @@ Two rules learned the hard way:
 Direct operators, no dispatch, no allocation:
 
 ```js
+t0[t1];                                         // elt a 1
 (t0_609[t1_610] = v_611);                      // setf! (elt a 1) 99
 (t0_612[t1_613] = ((t0_612[t1_613]) + (1)));    // incf! (elt a 1)
+t0.set(t1);                                     // gethash m "k"
 t0_618.set(t1_619, v_620);                      // setf! (gethash m "k") 7
 (t0_621.x = v_622);                             // setf! (get! o x) 42
 ```
@@ -196,9 +214,14 @@ value each appear exactly once.
 with hints supplied by the backend** — client code carries no type:
 
 ```clojure
+(elt a 1)           => (let [t0 a t1 1] (.get ^java.util.List t0 t1))
 (setf! (elt a 1) 99)  => (let [t0 a t1 1 v 99] (.set ^java.util.List t0 t1 v) v)
 (setf! (gethash m "k") 7) => (let [t0 m t1 "k" v 7] (.put ^java.util.Map t0 t1 v) v)
 ```
+
+The read and the write are the same operation with the same hint, from the same
+emitter family — which is what keeps `incf!` from being reachable on strictly fewer
+structures than `setf!` (F13).
 
 O(1) on `ArrayList`, `LinkedList`, `HashMap` and `TreeMap` alike. `nth` would
 have been the wrong choice: it requires `Indexed`, which excludes `LinkedList`,
@@ -296,6 +319,24 @@ concept ("array reference") while `elt` names the semantics (element at index).
 `clojure.core/elt` does not exist, so there is no collision, and there would not
 be one anyway: the place name is consumed by the macro in head position and never
 resolved as a function.
+
+**Q21 — a place name reads as well as writes.** The vocabulary originally shipped
+write-only: `elt` existed only as a token in `setf!`'s head position, and clients
+read back with `nth` / `.get` / `.-x`. That is a hole in a *generalized* assignment
+library — the same name should name both directions of the same place — and it
+forced portable client code to name host accessors anyway, which is exactly what
+this library exists to stop.
+
+The read side cost almost nothing, because the half already existed: `incf!` and
+`decf!` need a `:read` emitter to compute a new value, so every backend was already
+required to supply one. `expand-read` reuses it, and reuses `plan-binds`, so the
+read path gets the once-only evaluation rule for free. Per backend: three two-line
+macros. Per shared library: one function.
+
+The rejected alternative was a runtime `fn` named `elt` alongside the macro. It
+would have made `(map elt xs)` legal, and it would have thrown away the type hint
+on every JVM read — a measured regression against the one criterion that outranks
+all others. A macro is what `setf!` already is, so this costs nothing new.
 
 **Q17 — semantics, not the function it is named after.** Under the literal
 reading, a JVM `elt` would be O(n) on any `java.util.List`. Under this reading a
@@ -513,6 +554,15 @@ Toolchain facts that cost real time and are easy to re-trip:
   `(symbol …)` for generated names.
 - A `let` binding vector of vectors destructures; it does not bind two pairs.
   Interleave into a flat vector.
+- **Squint's `is` is node's `assert.equal`, i.e. `==`.** `==` on two distinct JS
+  arrays is *reference* equality, so an assertion comparing two collections that
+  print identically fails on Squint and passes on Clojure and ClojureScript. The
+  shared test suite therefore compares one value per assertion.
+- **ClojureScript does not intern keyword literals into a stable identity.** Two
+  occurrences of `:a` compile to two distinct `new cljs.core.Keyword(...)`
+  objects, so `(identical? :a :a)` is **false** and a `js/Map` written with one
+  occurrence cannot be read with the other. Verified in isolation, with no `setf!`
+  involved. Use string keys for a keyed place on the JS hosts.
 
 Versions used for every measurement: Node 24.16.0, openjdk 21.0.11, Clojure
 1.12.0, ClojureScript 1.12.42, Squint 0.14.210.
@@ -535,6 +585,9 @@ Versions used for every measurement: Node 24.16.0, openjdk 21.0.11, Clojure
   the split has been reasoned about and laid out, not performed.
 - `incf!`/`decf!` are the only derived forms, and no evidence exists yet for any
   other one.
+- **A place name cannot be passed by value.** `elt` is a macro (Q21), so
+  `(map elt colls)` does not compile on any host. A higher-order read would need a
+  runtime function, which costs the JVM type hint; that trade was taken knowingly.
 
 ## 15. Appendix — corrections made during the session
 
@@ -549,6 +602,7 @@ trustworthy. Each of these was a claim made without compiling it first.
 | "Add a build knob to detect when the type is unknown" | The emitter choice is six decisions made at backend authoring time, not a per-call-site state. Withdrawn. |
 | `incf!` returned the value it stored | It returned the *delta*. Found by the test suite, not by inspection. Fixed in the engine so all forms return what they stored. |
 | A slot argument is a compile-time name | Never checked. A list slot reached a backend and produced a `ClassCastException`. Now rejected by name in the shared namespace. |
+| "The vocabulary is complete because all three places can be written" | The read side was missing. A *generalized* assignment library whose place names cannot be read is half a library, and the gap pushed portable clients back to naming `nth` / `.get` / `.-x` by hand. Closed in Q21, reusing the `:read` emitter every backend already had for `incf!`. |
 
 The pattern is consistent: every serious error in this design was an inference
 made where a compile would have answered the question.
