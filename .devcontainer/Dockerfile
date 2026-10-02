@@ -61,6 +61,13 @@ ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-arm64
 RUN useradd -m -s /bin/bash vscode \
     && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/vscode
 
+# node_modules is a named volume (see devcontainer.json), not part of the bind
+# mount. Docker seeds an empty volume from the image's content at the mount
+# point, ownership included, so creating the directory here is what lets npm
+# write to it as vscode rather than hitting a root-owned mount.
+RUN mkdir -p /workspaces/leetcode/node_modules \
+    && chown -R vscode:vscode /workspaces
+
 USER vscode
 ENV PATH="/home/vscode/.local/bin:${PATH}"
 WORKDIR /home/vscode

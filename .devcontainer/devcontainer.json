@@ -19,6 +19,13 @@
             }
         }
     },
+    // Keep node_modules off the virtiofs bind mount: chmod on freshly written
+    // files there intermittently fails with EPERM, which breaks `npm ci` on
+    // first create. The volume is initialized from the (vscode-owned) directory
+    // baked into the image — see Dockerfile.
+    "mounts": [
+        "source=leetcode-node-modules,target=/workspaces/leetcode/node_modules,type=volume"
+    ],
     "name": "leetcode",
     "postCreateCommand": "bash .devcontainer/post-create.sh",
     "postStartCommand": "echo \"Container started.\"",
