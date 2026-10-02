@@ -23,6 +23,28 @@
              :write (fn [refs _ v]
                       (list 'set! (list (symbol (str ".-" (nth refs 1))) (nth refs 0)) v))}})
 
+;; ---------------------------------------------------------------------------
+;; The place names, reading. A place name is a macro, not a function: it must be
+;; the same form whether it is being written (`setf!` consumes it in head
+;; position) or read (expanded here), and `setf!` consumes it without expanding
+;; it, so the two directions never interfere.
+;; ---------------------------------------------------------------------------
+
+(defmacro elt
+  "Read the element at index `i` of `coll`. Any object the host indexes with `[]`."
+  [coll i]
+  (:code (contract/expand-read emit (list 'elt coll i))))
+
+(defmacro gethash
+  "Read the value at key `k` of `m`."
+  [m k]
+  (:code (contract/expand-read emit (list 'gethash m k))))
+
+(defmacro get!
+  "Read the field `f` of object `o`."
+  [o f]
+  (:code (contract/expand-read emit (list 'get! o f))))
+
 (defmacro setf!
   "Assign to a place. Returns `v`."
   [place value]

@@ -128,3 +128,27 @@
     (expand-with backend place-form delta-form :write
                  (fn [refs srcs delta]
                    (combine (rd refs srcs) delta)))))
+
+(defn expand-read
+  "Shared logic for reading a place in a value position: `(elt coll i)`,
+   `(gethash m k)`, `(get! o f)`.
+
+   This is the other half of a place, and it is the same half the backend already
+   had: `expand-derived!` needs a `:read` emitter to compute the new value, so
+   exporting it costs no new host knowledge. It binds RUNTIME arguments with the
+   same `plan-binds` the write path uses, so a compound index expression is
+   evaluated exactly once here too.
+
+   A place name is a macro on every host, not a function: a read has to be able to
+   attach whatever the host needs in order to emit its fastest access, and only a
+   macro can. The cost is that a place name cannot be passed by value -- `(map elt
+   xs)` is not a thing -- which is the same trade `setf!` already makes."
+  [backend place-form]
+  (let [spec     (place-spec place-form)
+        kind     (:kind spec)
+        rd       (lookup-op backend kind :read)
+        [binds refs srcs] (plan-binds (:argkinds spec) (rest place-form))
+        form     (rd refs srcs)]
+    {:kind kind :refs (vec refs) :srcs (vec srcs)
+     :read form
+     :code (list 'let (vec (apply concat binds)) form)}))

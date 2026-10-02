@@ -74,7 +74,26 @@
 
 ;; ---------------------------------------------------------------------------
 ;; The API. Identical names and semantics on every host; the logic is shared.
+;;
+;; The place names come in pairs: a macro reads a place, `setf!` writes it.
+;; `setf!` consumes `(elt coll i)` as a form and never expands it, so the same
+;; name means both directions without the two interfering.
 ;; ---------------------------------------------------------------------------
+
+(defmacro elt
+  "Read the element at index `i` of `coll`."
+  [coll i]
+  (:code (contract/expand-read emit (list 'elt coll i))))
+
+(defmacro gethash
+  "Read the value at key `k` of `m`."
+  [m k]
+  (:code (contract/expand-read emit (list 'gethash m k))))
+
+(defmacro get!
+  "Read the field `f` of object `o`."
+  [o f]
+  (:code (contract/expand-read emit (list 'get! o f))))
 
 (defmacro setf!
   "Assign to a place. `(setf! (elt coll i) v)`, `(setf! (gethash m k) v)`,

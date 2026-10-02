@@ -8,8 +8,8 @@
    Keep it to ONE `:require` entry per namespace -- two entries make Squint emit
    the same `import * as` twice, which is invalid ESM."
   (:require
-   #?(:clj  [setf.api :as api :refer [setf! incf! decf!]]
-      :cljs [setf.api :as api :refer-macros [setf! incf! decf!]])))
+   #?(:clj  [setf.api :as api :refer [setf! incf! decf! elt gethash get!]]
+      :cljs [setf.api :as api :refer-macros [setf! incf! decf! elt gethash get!]])))
 
 (defn run
   "Every place in the vocabulary, and every API form."
@@ -32,9 +32,10 @@
     ;; `(dec 1)` and `(+ 1 1)` each run once, not twice
     (setf! (elt a (dec 1)) (+ 1 1))
 
-    {:a  (nth  a 1)
-     :a0 (nth  a 0)
-     :m  (.get m "k")
-     :o  (.-x o)}))
+    ;; A place name is also the reader, so the same names read and write:
+    {:a  (elt    a 1)
+     :a0 (elt    a 0)
+     :m  (gethash m "k")
+     :o  (get!   o x)}))
 
 (defn -main [] (println "RESULT" (pr-str (run))))
