@@ -1,38 +1,20 @@
 (ns squintcode.lc-560-subarray-sum-equals-k-test
-  (:require #?@(:squint [[squintcode.macros :refer [deftest is testing run-tests]]
-                         ["assert" :as assert]]
-                :default [[clojure.test :refer [deftest is testing run-tests]]])
+  (:require [ucl.test :refer [deftest is testing]]
+            [ucl.api :as ucl]
             [squintcode.lc-560-subarray-sum-equals-k :refer [subarraySum]]))
+
+(defn arr [v] (ucl/make-array (count v) :initial-contents v))
 
 (deftest subarray-sum-basic-test
   (testing "subarraySum with [1,2,3] and k=3"
-    (is (= 2 (subarraySum [1 2 3] 3))
-        "Should find 2 subarrays: [1,2] and [3]")))
+    (is (= 2 (subarraySum (arr [1 2 3]) 3)) "[1,2] and [3]")))
 
 (deftest subarray-sum-edge-cases
-  (testing "subarraySum with empty array"
-    (is (= 0 (subarraySum [] 5))
-        "Empty array should return 0"))
-
-  (testing "subarraySum with single element matching k"
-    (is (= 1 (subarraySum [5] 5))
-        "Single element matching k should return 1"))
-
-  (testing "subarraySum with single element not matching k"
-    (is (= 0 (subarraySum [3] 5))
-        "Single element not matching k should return 0"))
-
-  (testing "subarraySum with no matching subarrays"
-    (is (= 0 (subarraySum [1 2 3] 10))
-        "No matching subarrays should return 0")))
+  (testing "empty array" (is (= 0 (subarraySum (arr []) 5))))
+  (testing "single element matching k" (is (= 1 (subarraySum (arr [5]) 5))))
+  (testing "single element not matching k" (is (= 0 (subarraySum (arr [3]) 5))))
+  (testing "no matching subarrays" (is (= 0 (subarraySum (arr [1 2 3]) 10)))))
 
 (deftest subarray-sum-complex-cases
-  (testing "subarraySum with [1,1,1] and k=2"
-    (is (= 2 (subarraySum [1 1 1] 2))
-        "Should find 2 subarrays: [1,1] at positions 0-1 and 1-2"))
-
-  (testing "subarraySum with negative numbers"
-    (is (= 3 (subarraySum [1 -1 0] 0))
-        "Should handle negative numbers correctly: [1,-1], [0], and [1,-1,0]")))
-
-(comment (run-tests 'squintcode.subarray-sum-equals-k-test))
+  (testing "[1,1,1] and k=2" (is (= 2 (subarraySum (arr [1 1 1]) 2))))
+  (testing "negative numbers" (is (= 3 (subarraySum (arr [1 -1 0]) 0)) "[1,-1], [0], [1,-1,0]")))

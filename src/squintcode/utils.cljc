@@ -1,7 +1,7 @@
 (ns squintcode.utils
-  #?(:cljs (:require-macros [squintcode.macros :as cl])
-     :clj (:require [squintcode.macros :as cl])))
+  (:require [ucl.api :as ucl]))
 
-(defn assoc-arr! [arr k v]
-  (cl/setf (cl/aref arr k) v)
+(ucl/defun assoc-arr! (arr k v)
+  (declare (type simple-vector arr))
+  (ucl/setf (ucl/elt arr k) v)
   arr)

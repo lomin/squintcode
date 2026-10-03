@@ -1,44 +1,24 @@
 (ns squintcode.lc-930-binary-subarrays-with-sum
-  #?(:cljs (:require-macros [squintcode.macros :as cl])
-     :clj (:require [squintcode.macros :as cl])))
+  (:require [ucl.api :as ucl]))
 
-(defn incf-array [arr k]
-  (cl/setf (cl/aref arr k)
-           (inc (cl/aref arr k)))
-  arr)
+;; Prefix sums of a binary array are 0..n, so their frequencies fit a vector
+;; indexed by the sum.
 
-(defn init-prefix-sum-frequencies [length]
-  (let [arr (cl/make-array (inc length)
-                           :element-type 'integer
-                           :initial-element 0)]
-    (cl/setf (cl/aref arr 0) 1)
-    arr))
-
-(defn count-matching-subarrays [prefix-sum-frequencies running-sum' goal]
-  (let [want (- running-sum' goal)]
-    (if (>= want 0)
-      (cl/aref prefix-sum-frequencies want)
-      0)))
-
-"/**
- * @param {number[]} nums
- * @param {number} goal
- * @return {number}
- */"
-(defn numSubarraysWithSum [nums goal]
-  (cl/aloop nums
-            [running-sum 0
-             result 0
-             prefix-sum-frequencies (init-prefix-sum-frequencies (cl/length self))]
-            (if it
-              (let [running-sum' (+ running-sum it)]
-                (recur running-sum'
-                       (+ result (count-matching-subarrays prefix-sum-frequencies running-sum' goal))
-                       (incf-array prefix-sum-frequencies running-sum')))
-              result)))
+(ucl/defun numSubarraysWithSum (nums goal)
+  (declare (type simple-vector nums))
+  (let [n    (ucl/length nums)
+        freq (ucl/make-array (inc n) :element-type 'fixnum)]
+    (ucl/setf (ucl/elt freq 0) 1)
+    (loop [i 0 running-sum 0 result 0]
+      (if (< i n)
+        (let [running-sum (+ running-sum (ucl/elt nums i))
+              want        (- running-sum goal)
+              result      (if (>= want 0) (+ result (ucl/elt freq want)) result)]
+          (ucl/incf (ucl/elt freq running-sum))
+          (recur (inc i) running-sum result))
+        result))))
 
 (comment
-; expecting: 4
-  (numSubarraysWithSum (cl/make-array 5 :initial-contents [1,0,1,0,1]) 0)
-; expecting: 15 
-  (numSubarraysWithSum (cl/make-array 5 :initial-contents [0,0,0,0,0]) 0))
+  ;; expecting 4, then 15
+  (numSubarraysWithSum (ucl/make-array 5 :initial-contents [1 0 1 0 1]) 2)
+  (numSubarraysWithSum (ucl/make-array 5 :initial-contents [0 0 0 0 0]) 0))

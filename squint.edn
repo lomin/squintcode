@@ -1,3 +1,4 @@
-{:paths ["src" "test"]
+{:paths ["src" "test"
+         "ucl/shared" "ucl/backends/js" "ucl/backends/squint" "ucl/testkit/squint"]
  :extension ".mjs"
  :output-dir "out"}

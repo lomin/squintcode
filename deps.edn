@@ -2,17 +2,20 @@
 
  :deps {org.clojure/clojurescript {:mvn/version "1.12.42"}}
 
+ ;; ucl backend selection is by source root (ucl/README.md §3): every host
+ ;; gets exactly one backend. Use one of :jvm / :cljs, never both.
  :aliases
- {;; Start a ClojureScript REPL (for Calva and interactive development)
+ {:jvm
+  {:extra-paths ["ucl/shared" "ucl/backends/jvm" "ucl/testkit/jvm"]}
+
+  :cljs
+  {:extra-paths ["ucl/shared" "ucl/backends/js" "ucl/backends/cljs" "ucl/testkit/cljs"]}
+
+  ;; ClojureScript REPL (Calva and interactive development): clj -M:cljs:repl
   :repl
   {:main-opts ["-m" "cljs.main" "--repl"]}
 
-  ;; Run tests once (using cljs-test-runner - canonical way)
-  :test
-  {:extra-deps {olical/cljs-test-runner {:mvn/version "3.8.1"}}
-   :main-opts ["-m" "cljs-test-runner.main"]}
-
-  ;; Continuous test runner (watches for changes and runs tests)
+  ;; Continuous ClojureScript test runner: clj -M:cljs:test-watch
   :test-watch
   {:extra-deps {olical/cljs-test-runner {:mvn/version "3.8.1"}}
    :main-opts ["-m" "cljs-test-runner.main" "-w" "src"]}}}

@@ -1,30 +1,33 @@
 (ns squintcode.fizzbuzz
-  #?(:cljs (:require-macros [squintcode.macros :as cl])
-     :clj (:require [squintcode.macros :as cl]))
-  (:require [squintcode.utils :refer [assoc-arr!]]))
+  (:require [ucl.api :as ucl]
+            [squintcode.utils :refer [assoc-arr!]]))
 
 (defn fizz-buzz-pred [a b]
   (zero? (mod b a)))
 
-(defn fizzBuzz [n]
-  (cl/forv [i (range 1 (inc n))]
-           (condp fizz-buzz-pred i
-             15 "FizzBuzz"
-             3  "Fizz"
-             5  "Buzz"
-             (str i))))
+(defn fizz-buzz-word [x]
+  (condp fizz-buzz-pred x
+    15 "FizzBuzz"
+    3  "Fizz"
+    5  "Buzz"
+    (str x)))
 
-(defn fizzBuzz2 [n]
-  (cl/aloop
-   (range 1 (inc n))
-   [result (cl/make-array (cl/length self))]
-   (if it
-     (recur (assoc-arr! result (dec it) (condp fizz-buzz-pred it
-                                          15 "FizzBuzz"
-                                          3  "Fizz"
-                                          5  "Buzz"
-                                          (str it))))
-     result)))
+(ucl/defun fizzBuzz (n)
+  (declare (type fixnum n))
+  (let [answer (ucl/make-array n)]
+    (loop [i 0]
+      (if (< i n)
+        (do (ucl/setf (ucl/elt answer i) (fizz-buzz-word (inc i)))
+            (recur (inc i)))
+        answer))))
+
+(ucl/defun fizzBuzz2 (n)
+  (declare (type fixnum n))
+  (loop [x 1
+         result (ucl/make-array n)]
+    (if (<= x n)
+      (recur (inc x) (assoc-arr! result (dec x) (fizz-buzz-word x)))
+      result)))
 
 (comment
   (fizzBuzz 4)
