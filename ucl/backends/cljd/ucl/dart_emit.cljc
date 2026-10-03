@@ -255,6 +255,13 @@
              :subseq (fn [v s e] (list (rt 'subseq-of) v s e))
              :sort-native (fn [_ fallback] fallback)}
      :types {:hint (fn [t _] (type-hint env t))
-             :local-hint (fn [t] (when (contains? #{:fixnum :sb53} t) 'int))}
+             :local-hint (fn [t] (when (contains? #{:fixnum :sb53} t) 'int))
+             ;; I48: a symbol declared a fixnum- or sb53-vector -- its tag is
+             ;; List<int> (type-hint) -- has int elements; a hint, never meaning
+             :vector-element (fn [sym]
+                               #?(:cljd/clj-host
+                                  (let [k (first (find env sym))]
+                                    (when (= 'int (some-> k meta :tag meta :type-params first)) :fixnum))
+                                  :cljd nil))}
      :struct {:define (fn [model] (define-struct env model))}
      :method {:define (fn [m] (define-method env m))}}))

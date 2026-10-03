@@ -476,6 +476,39 @@
               (pr-str (or (:form spec) (:f spec))) " does not take"))
         :else nil))
 
+(defn ^:macro-support integer-preserving?
+  "Does the function spec `fs` return an integer when given integers?"
+  [fs]
+  (and (= :call (:kind fs))
+       (contains? #{"min" "max" "+" "-" "*" "bit-and" "bit-or" "bit-xor"} (operator-name (:f fs)))))
+
+(defn ^:macro-support integer-elements?
+  "Are the elements of the sequence `v` declared integers (I48)? Only a
+   symbol can say, through the backend's environment -- and not one that an
+   early expansion's enclosing form cannot see rebound (`:rebound`)."
+  [backend v]
+  (let [r (:rebound backend)]
+    (and (symbol? v)
+         (not= :all r)
+         (not (contains? r v))
+         (contains? #{:fixnum :sb53} ((contract/op backend :types :vector-element) v)))))
+
+(defn ^:macro-support accumulator
+  "reduce's accumulator, hinted as an integer where the host types locals by
+   hint and the value is surely one (I48): a typed loop local on Dart AOT is
+   2-4x a dynamic one."
+  [backend v fs kf]
+  (let [acc (gensym "acc")
+        h   ((contract/op backend :types :local-hint) :fixnum)
+        init (get kf :initial-value)]
+    (if (and h
+             (nil? (:key kf))
+             (or (not (contains? kf :initial-value)) (integer? init))
+             (integer-preserving? fs)
+             (integer-elements? backend v))
+      (vary-meta acc assoc :tag h)
+      acc)))
+
 (defn ^:macro-support expand-reduce [backend form]
   (let [[_ f sq & kvs] form
         spec      (get (specs) "reduce")
@@ -489,7 +522,7 @@
         [st e]    (bind st e "e")
         st        (check-bounds backend st v s e)
         init?     (contains? kf :initial-value)
-        acc       (gensym "acc")
+        acc       (accumulator backend v fs kf)
         step      (fn [fe]
                     (fn [i nxt]
                       (let [el (gensym "el")]

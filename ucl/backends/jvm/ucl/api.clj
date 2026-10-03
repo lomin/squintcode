@@ -378,7 +378,9 @@
      ;; a local bound to a literal: Clojure already infers a primitive long,
      ;; and refuses a hint there ("Can't type hint a local with a primitive initializer")
      :types {:hint (fn [t n] (type-tag t n))
-             :local-hint (fn [_] nil)}
+             :local-hint (fn [_] nil)
+             ;; the JVM infers a primitive local from its init (I48)
+             :vector-element (fn [_] nil)}
      :struct {:define define-struct}
      :method {:define define-method}}))
 

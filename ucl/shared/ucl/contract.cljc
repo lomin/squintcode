@@ -635,11 +635,22 @@
   [form]
   (or (keyword? form) (true? form)))
 
+(defn ^:macro-support rebound
+  "The backend, for an expansion under bindings of `names` its enclosing
+   form's environment does not show (I48): a hint must not trust them."
+  [backend names]
+  (if (= :all (:rebound backend))
+    backend
+    (update backend :rebound (fn [r] (into (if (set? r) r #{}) names)))))
+
 (defn ^:macro-support assign-tails
   "`form` as a statement whose every return position calls `assign` on the
    value it would have returned. `recur` stays a `recur`."
   [backend form assign]
   (let [tail      (fn [f] (assign-tails backend f assign))
+        ;; the tail of a binding form: names it binds are rebound for an
+        ;; expansion there (I48)
+        under     (fn [names] (fn [f] (assign-tails (rebound backend names) f assign)))
         n         (head-name form)
         head      (when n (first form))
         args      (when n (rest form))
@@ -667,17 +678,21 @@
       (= "do" n)        (list* 'do (body-tail args))
 
       (and (contains? #{"let" "let*" "loop" "loop*"} n) (vector? (first args)))
-      (list* head (first args) (body-tail (rest args)))
+      (let [t (under (mapcat binding-symbols (take-nth 2 (first args))))]
+        (list* head (first args) (concat (butlast (rest args)) [(t (last (rest args)))])))
 
       (and (contains? #{"let" "let*"} n) (seq? (first args)))
-      (let [[decls body] (split-with declare-form? (rest args))]
-        (list* head (first args) (concat decls (body-tail body))))
+      (let [[decls body] (split-with declare-form? (rest args))
+            t (under (map var-binding-name (first args)))]
+        (list* head (first args) (concat decls (butlast body) [(t (last body))])))
 
       (registered backend form)
       (tail (expand-registered backend form))
 
       (= "with-slots" n)
-      (list* head (first args) (second args) (body-tail (drop 2 args)))
+      (let [t (under (map var-binding-name (first args)))
+            body (drop 2 args)]
+        (list* head (first args) (second args) (concat (butlast body) [(t (last body))])))
 
       :else (assign form))))
 
@@ -898,7 +913,7 @@
                           ;; a literal after the loop -- `nil`, `-1` -- joins its
                           ;; normal ends: nothing can shadow it or recur in it
                           (and (= mode :direct) (literal? k))
-                          (list head bs (tseq [(assign-tails backend (list* 'do body)
+                          (list head bs (tseq [(assign-tails (assoc backend :rebound :all) (list* 'do body)
                                                              (fn [x] (if (exit-target x) x (seq-do x k))))]
                                               :ret mode))
                           (and (= mode :flag) (trivial? k)) (seq-do (list head bs (tseq body :ret :flag)) k)
@@ -918,7 +933,7 @@
                                (fn [k mode] (list head slots obj (tseq body k mode)))))
 
                       (registered backend form)
-                      (t (expand-registered backend form) k mode)
+                      (t (expand-registered (assoc backend :rebound :all) form) k mode)
 
                       :else
                       (no-ex form (str "an argument of (" (if (symbol? head) head "...") " ...)"))))))]
@@ -1079,7 +1094,7 @@
                                    args)))
 
                 (and (:backend env) (registered (:backend env) form))
-                (walk env (expand-registered (:backend env) form))
+                (walk env (expand-registered (rebound (:backend env) (:shadowed env)) form))
 
                 :else (cons (if (symbol? head) head (walk env head)) (lmap #(walk env %) args)))))
           (walk [env form]

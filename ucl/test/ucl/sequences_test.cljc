@@ -227,6 +227,20 @@
     (when (ucl/find-if odd? (ucl/elt rows i))
       (ucl/return i))))
 
+(ucl/defun sum-of-other (nums other)
+  "nums is declared a fixnum-vector, but the reduce sums a rebound nums --
+   expanded early by the enclosing ucl/let, which must not hint it (I48)."
+  (declare (type fixnum-vector nums) (type simple-vector other))
+  (ucl/let ((m (let [nums other] (ucl/reduce + nums))))
+    m))
+
+(deftest typed-accumulator-test
+  (testing "reduce over a declared fixnum-vector (an int accumulator on Dart)"
+    (is (== 9 (k/largest (arr [3 9 2]))))
+    (is (== 6 (ucl/reduce + (arr [1 2 3]) :initial-value 0))))
+  (testing "a rebound name gets no hint: its elements may be anything"
+    (is (== 4 (sum-of-other (arr [1]) (general [1.5 2.5]))))))
+
 (deftest positions-test
   (testing "a ucl/let init and a setf of a variable run as a statement (D51)"
     (ucl/let ((n (ucl/count-if odd? (arr [1 2 3]))))
