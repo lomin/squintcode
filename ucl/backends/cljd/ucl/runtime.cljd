@@ -1,0 +1,98 @@
+(ns ucl.runtime
+  "ucl on ClojureDart: the run-time half that expansions call as
+   ucl.runtime/<name>.
+
+   Its own namespace, not ucl.api: ClojureDart expands macros before special
+   forms, so code compiled in ucl.api, where defapi defines `let` and `let*`,
+   would expand against ucl's (H40).
+
+   Everything a submission can reach -- the constructors, `push`,
+   `get-or-default`, the cells -- is plain Dart interop: a LeetCode submission
+   is standalone Dart and may not call cljd.core (D38). The checks are only
+   emitted at safety >= 1, never in a submission, and may use it."
+  (:require ["dart:typed_data" :as td]))
+
+;; ---------------------------------------------------------------------------
+;; Vectors (README §5). A client has not imported dart:typed_data, so an
+;; expansion cannot name td/Int32List there (H23); it calls these.
+;; ---------------------------------------------------------------------------
+
+(defn make-fixnum-vector ^td/Int32List [^int n] (td/Int32List n))
+
+(defn make-fixnum-vector-filled ^td/Int32List [^int n ^int init]
+  (doto (td/Int32List n) (.fillRange 0 n init)))
+
+(defn fixnum-vector-from ^td/Int32List [^List contents]
+  (.fromList td/Int32List (.from #/(List int) contents)))
+
+(defn make-sb53-vector ^td/Int64List [^int n] (td/Int64List n))
+
+(defn make-sb53-vector-filled ^td/Int64List [^int n ^int init]
+  (doto (td/Int64List n) (.fillRange 0 n init)))
+
+(defn sb53-vector-from ^td/Int64List [^List contents]
+  (.fromList td/Int64List (.from #/(List int) contents)))
+
+(defn push
+  "vector-push-extend: append `x`, return its index."
+  ^int [x ^List v]
+  (.add v x)
+  (- (.-length v) 1))
+
+;; ---------------------------------------------------------------------------
+;; Hash tables (README §6): a Dart Map. A key stored with nil is present.
+;; ---------------------------------------------------------------------------
+
+(defn make-hash-table ^Map [] (Map))
+
+(defn get-or-default [k ^Map m d]
+  (let [v (. m "[]" k)]
+    (if (or (some? v) (.containsKey m k)) v d)))
+
+;; ---------------------------------------------------------------------------
+;; Variables (D30): ClojureDart cannot assign a local (H39), so a variable is
+;; a one-field cell -- `int` when declared fixnum or (signed-byte 53).
+;; ---------------------------------------------------------------------------
+
+(deftype IntCell [^:mutable ^int v])
+(deftype Cell [^:mutable v])
+
+;; ---------------------------------------------------------------------------
+;; Checks, safety >= 1 only (D2, D11, D34)
+;; ---------------------------------------------------------------------------
+
+(defn fail [msg] (throw (Exception (str "ucl: " msg))))
+
+(defn check-number [x]
+  (if (dart/is? x num) x (fail (str "the value " (pr-str x) " is not a number"))))
+
+(defn check-fixnum ^int [x]
+  (if (and (dart/is? x int) (<= -2147483648 x 2147483647))
+    x
+    (fail (str "the value " (pr-str x) " is not of type fixnum"))))
+
+(defn check-sb53 ^int [x]
+  (if (and (dart/is? x int) (<= -9007199254740991 x 9007199254740991))
+    x
+    (fail (str "the value " (pr-str x) " is not of type (signed-byte 53)"))))
+
+(defn elt-set-checked
+  "A store at safety >= 1. Dart checks the index itself (RangeError); an
+   Int32List would silently wrap a value outside fixnum."
+  [^List a ^int i v]
+  (cond
+    (dart/is? a td/Int32List) (check-fixnum v)
+    (dart/is? a td/Int64List) (check-sb53 v))
+  (. a "[]=" i v)
+  v)
+
+(defn push-checked [x v]
+  (when-not (and (dart/is? v List) (not (dart/is? v td/TypedData)))
+    (fail "vector-push-extend needs an adjustable vector with a fill pointer"))
+  (push x v))
+
+(defn check-contents [^int n ^List contents]
+  (let [c (.-length contents)]
+    (when-not (== c n)
+      (fail (str "make-array of " n " elements given " c " initial contents")))
+    contents))

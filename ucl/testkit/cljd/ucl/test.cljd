@@ -1,0 +1,12 @@
+(ns ucl.test
+  "The test vocabulary every ucl suite uses. On ClojureDart it is cljd.test."
+  (:require [cljd.test]))
+
+(defmacro deftest [& args] `(cljd.test/deftest ~@args))
+(defmacro is [& args] `(cljd.test/is ~@args))
+(defmacro testing [& args] `(cljd.test/testing ~@args))
+
+(defmacro signals-error?
+  "True when evaluating `body` signals an error."
+  [& body]
+  `(try ~@body false (catch Object _# true)))

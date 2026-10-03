@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the ucl suite on every host: Clojure/JVM, ClojureScript, Squint.
+# Run the ucl suite on every host: Clojure/JVM, ClojureScript, Squint, ClojureDart.
 #
 # Backend selection is by source root: each host gets shared/, its own
 # backends/<host> (plus backends/js for the two JS hosts) and testkit/<host>,
@@ -10,7 +10,9 @@ ROOT="$(cd .. && pwd)"
 SQUINT="${SQUINT:-$ROOT/node_modules/.bin/squint}"
 CLJS_VERSION="${CLJS_VERSION:-1.12.42}"
 OUT=out
-HOSTS="${*:-jvm cljs squint}"   # e.g. ./run-tests.sh squint
+HOSTS="${*:-jvm cljs squint cljd}"   # e.g. ./run-tests.sh squint
+DART_SDK="${DART_SDK:-$HOME/.local/dart-sdk}"
+export PATH="$DART_SDK/bin:$PATH"
 want () { [[ " $HOSTS " == *" $1 "* ]]; }
 
 hr () { printf '\n%s\n%s\n%s\n' "======================================================" "$1" "======================================================"; }
@@ -93,6 +95,38 @@ if grep -q '(() =>' "$OUT/squint0/js/ucl/kernels.mjs"; then
   echo "ucl/kernels compiles to an IIFE at safety 0:"; grep -n -B2 -A2 '(() =>' "$OUT/squint0/js/ucl/kernels.mjs"; exit 1
 fi
 echo "no IIFE in the kernels at safety 0"
+fi
+
+# ClojureDart builds a project: cljd-project/ is its template, the sources are
+# copied into src/ (tools.deps no longer takes paths outside a project), and
+# the Dart packages stay between runs.
+cljd_project () {   # cljd_project <dir> <source dirs...>
+  local dir="$1"; shift
+  mkdir -p "$dir"
+  cp cljd-project/deps.edn cljd-project/pubspec.yaml "$dir/"
+  rm -rf "$dir/src" "$dir/lib/cljd-out" "$dir/test/cljd-out" && mkdir -p "$dir/src"
+  for d in "$@"; do cp -r "$d/." "$dir/src/"; done
+}
+cljd_build () {     # cljd_build <dir> <jvm opts> <cljd.build args...>
+  local dir="$1" jopts="$2" report; shift 2
+  report="$(pwd)/cljd-project/report.clj"
+  (cd "$dir" && clojure $jopts -M -i "$report" -m cljd.build "$@")
+}
+
+if want cljd; then
+hr "CLOJUREDART"
+cljd_project "$OUT/cljd" shared backends/cljd testkit/cljd test
+cljd_build "$OUT/cljd" "" test $NSES
+
+hr "CLOJUREDART AT SAFETY 0 (submission builds)"
+cljd_build "$OUT/cljd" "-J-Ducl.safety=0" compile ucl.kernels > "$OUT/cljd/kernels.log" 2>&1 \
+  || { cat "$OUT/cljd/kernels.log"; exit 1; }
+# D38: a submission is standalone Dart. The kernels are LeetCode-shaped; their
+# safety-0 build must not call the ClojureDart runtime.
+if grep -q 'lcoc_core\.' "$OUT/cljd/lib/cljd-out/ucl/kernels.dart"; then
+  echo "ucl/kernels calls cljd.core at safety 0:"; grep -n 'lcoc_core\.' "$OUT/cljd/lib/cljd-out/ucl/kernels.dart"; exit 1
+fi
+echo "no ClojureDart runtime in the kernels at safety 0"
 fi
 
 hr "ALL HOSTS PASSED"

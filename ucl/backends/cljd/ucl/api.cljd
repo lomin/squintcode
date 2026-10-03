@@ -1,0 +1,20 @@
+(ns ucl.api
+  "ucl on ClojureDart. Macros only: the emit map is ucl.dart-emit's, the
+   run-time half is ucl.runtime, the model is ucl.contract.
+
+   ClojureDart expands macros before special forms (H40), so nothing compiled
+   in this namespace may expand against the `let` and `let*` that defapi
+   defines here; the contract's let* returns a binding vector unchanged, which
+   ends that expansion."
+  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes])
+  (:require [ucl.contract :as contract]
+            [ucl.dart-emit :as dart-emit]
+            [ucl.runtime]))
+
+(contract/defruntime
+  {:positive-infinity double/infinity
+   :negative-infinity double/negativeInfinity
+   :min-inline (fn [& args] (contract/expand-extremum (dart-emit/emit {}) :min args))
+   :max-inline (fn [& args] (contract/expand-extremum (dart-emit/emit {}) :max args))})
+
+(contract/defapi (dart-emit/emit &env) {:inline-extrema? true})
