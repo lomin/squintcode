@@ -6,8 +6,9 @@
    in this namespace may expand against the `let` and `let*` that defapi
    defines here; the contract's let* returns a binding vector unchanged, which
    ends that expansion."
-  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes])
+  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop])
   (:require [ucl.contract :as contract]
+            [ucl.loop :as ucl-loop]
             [ucl.dart-emit :as dart-emit]
             [ucl.runtime]))
 
@@ -17,4 +18,4 @@
    :min-inline (fn [& args] (contract/expand-extremum (dart-emit/emit {}) :min args))
    :max-inline (fn [& args] (contract/expand-extremum (dart-emit/emit {}) :max args))})
 
-(contract/defapi (dart-emit/emit &env) {:inline-extrema? true})
+(contract/defapi (dart-emit/emit &env) {:inline-extrema? true :vocabularies [ucl-loop/expanders]})

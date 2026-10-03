@@ -57,3 +57,29 @@
     (signals? #"\(return \.\.\.\) has no enclosing block named nil" (ucl/return 1))
     (signals? #"\(return-from nowhere \.\.\.\) has no enclosing block named nowhere"
               (ucl/block b (ucl/return-from nowhere 1)))))
+
+(deftest loop-rejections-test
+  (testing "clauses that need a data type ucl lacks (D53) name the alternative"
+    (signals? #"for x in iterates a list; ucl has no lists \(D53\)\. Use for x across"
+              (ucl/loop for x in xs sum x))
+    (signals? #"collect builds a list; ucl has no lists \(D53\)"
+              (ucl/loop for x across [1] collect x))
+    (signals? #"destructuring \(\(a b\)\) needs conses"
+              (ucl/loop for (a b) across [1] sum a)))
+  (testing "the grammar"
+    (signals? #"a for clause after a main clause" (ucl/loop do (f) for x across [1]))
+    (signals? #"unknown clause foo" (ucl/loop for x across [1] foo x))
+    (signals? #"counting down needs a start" (ucl/loop for i downto 0 sum i))
+    (signals? #"a for name is bound twice" (ucl/loop for i below 3 for i below 4 sum i)))
+  (testing "one default accumulator, of one kind"
+    (signals? #"sum/count and maximize/minimize accumulate into one value"
+              (ucl/loop for x across [1] sum x maximize x))
+    (signals? #"always, never and thereis decide the loop's value"
+              (ucl/loop for x across [1] sum x always x)))
+  (testing "not built yet (§13)"
+    (signals? #"loop-finish is not built yet" (ucl/loop for x across [1] loop-finish))
+    (signals? #"loop-finish is not built yet" (ucl/loop for x across [1] do (when x (loop-finish))))
+    (signals? #"hash-table iteration is designed \(D58\) but not built yet"
+              (ucl/loop for k being the hash-keys of h sum k))
+    (signals? #"parallel stepping\) is not built yet"
+              (ucl/loop for x across [1] and y across [2] sum x))))

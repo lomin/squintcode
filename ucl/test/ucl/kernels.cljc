@@ -83,3 +83,13 @@
           (ucl/return-from pair-with-sum (+ (* 1000 j) i))))
       (ucl/incf hits))
     (- -1 hits)))
+
+(ucl/defun num-subarrays-with-sum-loop (nums goal)
+  "ucl/loop (D53): LeetCode 930 as README §4.3 writes it."
+  (declare (type fixnum-vector nums) (type fixnum goal))
+  (let [freq (ucl/make-array (inc (ucl/length nums)) :element-type 'fixnum)]
+    (ucl/setf (ucl/elt freq 0) 1)
+    (ucl/loop for x across nums
+              sum x into s of-type fixnum
+              when (>= s goal) sum (ucl/elt freq (- s goal))
+              do (ucl/incf (ucl/elt freq s)))))

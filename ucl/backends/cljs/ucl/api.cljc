@@ -1,10 +1,11 @@
 (ns ucl.api
   "ucl on ClojureScript, macro half (runs on the JVM while ClojureScript
    compiles). The emit map is ucl.js-emit's, in the ClojureScript flavor."
-  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes])
+  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop])
   (:require [cljs.env :as env]
             [ucl.contract :as contract]
-            [ucl.js-emit :as js-emit]))
+            [ucl.js-emit :as js-emit]
+            [ucl.loop :as ucl-loop]))
 
 (def flavor
   {:array-literal (fn [items] (cons 'array items))
@@ -22,7 +23,7 @@
 
 (defn emit [env] (js-emit/emit-map flavor env))
 
-(contract/defapi (emit &env))
+(contract/defapi (emit &env) {:vocabularies [ucl-loop/expanders]})
 
 ;; LeetCode's own classes are globals there; a solution names them bare, as in
 ;; (new ListNode 0 head). Declaring them as cljs.core names lets ClojureScript

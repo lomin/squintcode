@@ -27,8 +27,8 @@ expansion. Designed, not built (§4.2, D44–D52, §9.11).
 **`ucl/loop` and blocks** (2026-10-03, a fifth grilling session): Common
 Lisp's `LOOP` over vectors, numbers and hash tables, and its block model --
 `block`, `return-from`, `return` -- with every exit compiled statically.
-Blocks are built (I23–I26); `ucl/loop` is designed (§4.3, D53–D62, §9.12,
-H59–H62).
+Blocks and `ucl/loop` are built (I23–I28), but for hash-table iteration,
+`loop-finish` and parallel `for … and` (§13); §4.3, D53–D62, §9.12, H59–H62.
 
 ```bash
 ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint, ClojureDart
@@ -121,6 +121,7 @@ hosts — and the shared code **never branches on host**: no host list, no
 ```
 ucl/
   shared/ucl/contract.cljc        the whole model, names no host; defapi, defruntime
+  shared/ucl/loop.cljc            ucl/loop's expansion, a vocabulary of the registry (I23)
   backends/jvm/ucl/api.clj        emit map, run-time half, (contract/defapi …)
   backends/js/ucl/js_emit.cljc    the JS family's emit map and run-time helpers (I1)
   backends/cljs/ucl/api.cljc      ClojureScript flavor + (contract/defapi …)   macro half
@@ -221,6 +222,7 @@ meaning.
 | `(ucl/let ((var init) …) (declare …) body…)` `(ucl/let* …)` | bind variables, in parallel / in order | D29, D31, D32 |
 | `(ucl/dotimes (var count [result]) (declare …) body…)` | `var` from 0 below `count`, then `result` | D33 |
 | `(ucl/block name body…)` `(ucl/return-from name [v])` `(ucl/return [v])` | leave a block with a value; `ucl/dotimes` is a block `nil`, `ucl/defun`/`ucl/defmethod` a block named after themselves | D55, D56 |
+| `(ucl/loop clause…)` | Common Lisp's `LOOP` over vectors and numbers | D53–D62 |
 | `(ucl/min a b …)` `(ucl/max a b …)` | inline in call position; functions as values (`(reduce ucl/max …)`) | D21 |
 | `ucl/most-positive-fixnum` `ucl/most-negative-fixnum` | ±2³¹ bounds (D10) | D23 |
 | `ucl/double-float-positive-infinity` `…-negative-…` | the SBCL/ECL extension names | D23 |
@@ -230,7 +232,7 @@ meaning.
 
 **Loops are Clojure's own `loop`/`recur`** with `elt`/`length` (D20), plus
 `ucl/dotimes` (D33). They compile to a plain `while` on every host. `aloop` and
-`forv` are retired. A Common Lisp `LOOP` (`ucl/loop`) is designed (§4.3).
+`forv` are retired. Common Lisp's `LOOP` is `ucl/loop` (§4.3).
 
 **A loop's state lives in variables** (§4.1): an inner loop is a statement that
 assigns them, and a loop's value is bound with `ucl/let`, never with `let`.
@@ -368,7 +370,7 @@ exercised. In parallel, the native bulk operations D45 needs are measured
 `test/ucl/kernels.cljc` under I12 and I19, and one ported solution measured
 against its `loop`/`recur` version.
 
-### 4.3 `ucl/loop` and blocks (D53–D62) -- blocks built, `ucl/loop` designed
+### 4.3 `ucl/loop` and blocks (D53–D62) -- built, but hash-table iteration (§13)
 
 `ucl/loop` is Common Lisp's `LOOP` (CLHS 6.1) for what ucl has: vectors,
 numbers, hash tables. It exists to make a solution short without making it
@@ -474,7 +476,7 @@ slower: its clauses expand to the `while` loop with assigned variables that
 
 Multiple values (`multiple-value-bind`), `mulmod`, hash-table deletion,
 `maphash`, `aref` (reserved), CLOS `defclass`, `:test 'equal`. Hash-table
-iteration and `ucl/loop` are designed (§4.3).
+iteration is designed (§4.3, D58).
 
 ## 5. Arrays and types
 
@@ -1278,6 +1280,16 @@ SBCL 2.2.9, ECL 21.2.1):
   `maximize`, `minimize` as `number`, `count` as `fixnum`
   (`(macroexpand-1 '(loop … sum x into s count x into c))`).
 
+Found while building `ucl/loop` (SBCL 2.2.9, ECL 21.2.1):
+
+- **H63** — ECL refuses a `count` and a `sum` into the default accumulator
+  ("Specified data type NUMBER is not a subtype of REAL"), which CLHS 6.1.3
+  allows and SBCL accepts: such a form is no conformance case (D60).
+- **H64** — SBCL and ECL agree where CLHS is vague: an empty `maximize`
+  returns 0, and `finally` sees each `for` name's last value -- the stepped
+  value that failed its end test, a later clause not stepped
+  (`for i from 1 to 3 for j = (* i 10)` ends with `i` 4, `j` 30).
+
 ## 11. Decision log
 
 "Evidence" means a measurement or probe decided it; "user judgement" means it
@@ -1379,6 +1391,8 @@ Made while building v1, not in the grilling session; each is reversible.
 | I24 | `expand-counted-loop` -- `dotimes`' loop without its parsing (and, with D56, without its block) -- is the counted iteration every vocabulary expands to | a sequence function's inlined `fn` must not see a `nil` block of ucl's own (D56) |
 | I25 | A block is compiled eagerly by the form that establishes it (`ucl/block`, `ucl/defun`, `ucl/defmethod`, `ucl/dotimes`), outside in: an exit in return position is its value; in statement position the rest of the body moves into the branch that does not exit -- unless it would be copied (several branches complete normally), shadowed (a `let`), or repeated (a loop; a literal rest joins the loop's normal ends instead). Otherwise the exit assigns an internal result and flag and the rest is guarded. A block nothing exits from is its body unchanged | the exit `(when c (return-from f i))` in a loop compiles to JavaScript's `return i` -- read in the kernels' build; every existing submission builds identical |
 | I26 | `defapi` defines a macro for each of `vocabulary-names` -- a literal list every vocabulary adds its names to -- that expands through its registry entry (`expand-vocabulary`), without `:applies?` | one place for the API surface (D26) of `ucl/loop` and the sequence functions; agreed with the sequence-functions session |
+| I27 | `ucl/loop` expands to one Clojure `loop` whose parameters are the `for` names, the internal counters, the default accumulator and `maximize`/`minimize` first-flags; each iteration runs the main clauses in order, then each `for` clause's step and end test, as Common Lisp orders them -- the same tests run once on the first values before the loop. A conditional binds its test (`it`) and a then/else local, and guards each clause under it; a value is read once, a `with`/`into` name assigned with `ucl/setf`. The epilogue (`finally`, the value) is copied to every end test, where every name it reads is bound -- no variable carries a value out of the loop | the 930 kernel's JavaScript is the hand-written loop: one `while`, one ternary per guarded `sum`, no IIFE; SBCL and ECL print the same `finally` values (H64) |
+| I28 | An expansion writes ucl's forms through the alias the caller wrote `ucl/loop` with (`ucl/elt`, `ucl/let`, `ucl/block`), and they expand later where the environment is right (I23) | they resolve exactly as the caller's own code; no host needs a fully qualified macro name |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1538,7 +1552,10 @@ backend selection by source root; mutable host collections only.
   it whatever that statement evaluates first, and stopping at a branch or an
   unexpanded user macro. Deferred: kept simple until a solution shows an IIFE
   on a hot path, then designed once for both vocabularies.
-- **`ucl/loop` and blocks** (D53–D62), designed, not built:
+- **`ucl/loop` and blocks** (D53–D62):
+  - Not built yet: hash-table iteration (`being the hash-keys`, D58),
+    `loop-finish`, and parallel stepping (`for … and …`). Each is rejected
+    with a message saying so.
   - The cost of an exit through a nested loop (one flag test per outer
     iteration) and of a hash-table iteration step on each host is reasoned,
     not measured; the ports measure both (D62).

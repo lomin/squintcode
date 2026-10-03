@@ -97,7 +97,11 @@ Rules:
   `length`, `vector-push-extend`, `make-hash-table`, `(gethash key table [default])`,
   `(slot-value obj 'slot)`, `setf`, `incf`, `decf`, `min`, `max`,
   `(let ((var init)…) (declare …) …)`, `let*`, `(dotimes (i n [result]) …)`,
-  `(block name …)`, `(return-from name [v])`, `(return [v])` (`dotimes` is a block
+  `(loop clause…)` (Common Lisp's LOOP for vectors and numbers: `for … across`,
+  `for … from/below/to/by`, `sum`/`count`/`maximize`/`minimize` `[into v
+  of-type T]`, `when`/`unless`/`else`, `while`/`until`/`repeat`, `always`/`never`/
+  `thereis`, `with`, `finally`; no list clauses), `(block name …)`,
+  `(return-from name [v])`, `(return [v])` (`dotimes` is a block
   nil, `defun` one named after it; an exit compiles only in statement or return
   position), `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
   `defmethod`, `with-slots`, `princ-to-string`, `most-positive-fixnum`,
@@ -147,6 +151,7 @@ src/squintcode/*.cljc        solutions
 test/squintcode/*_test.cljc  their tests
 ucl/                         the library -- see ucl/README.md
   shared/ucl/contract.cljc     all host-agnostic logic; names no host
+  shared/ucl/loop.cljc         ucl/loop (Common Lisp's LOOP), a registry vocabulary
   backends/{jvm,js,cljs,squint,cljd}/  per-host emitters
   testkit/{jvm,cljs,squint,cljd}/  ucl.test + LeetCode fixtures (never in a submission)
   cljd-project/                the ClojureDart project template builds are made from

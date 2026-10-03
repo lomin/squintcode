@@ -8,8 +8,9 @@
 
    This namespace defines ucl/let and ucl/dotimes, so it excludes Clojure's
    and spells them clojure.core/let and clojure.core/dotimes."
-  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes])
-  (:require [ucl.contract :as contract])
+  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop])
+  (:require [ucl.contract :as contract]
+            [ucl.loop :as ucl-loop])
   (:import [clojure.lang Compiler$LocalBinding RT]
            [java.util ArrayList HashMap List Map]))
 
@@ -365,4 +366,4 @@
    :min-inline (fn [& args] (contract/expand-extremum (emit {}) :min args))
    :max-inline (fn [& args] (contract/expand-extremum (emit {}) :max args))})
 
-(contract/defapi (emit &env) {:inline-extrema? true})
+(contract/defapi (emit &env) {:inline-extrema? true :vocabularies [ucl-loop/expanders]})

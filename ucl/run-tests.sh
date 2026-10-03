@@ -70,7 +70,7 @@ squint_compile () {   # squint_compile <dir> <safety> <files...> -- every file i
   if grep -qi 'error' "$dir/compile.log"; then cat "$dir/compile.log"; exit 1; fi
 }
 
-SOURCES="shared/ucl/contract.cljc backends/js/ucl/js_emit.cljc backends/squint/ucl/api.cljc
+SOURCES="shared/ucl/contract.cljc shared/ucl/loop.cljc backends/js/ucl/js_emit.cljc backends/squint/ucl/api.cljc
          testkit/squint/ucl/test.cljc testkit/squint/ucl/leetcode.cljc $(cd test && find . -name '*.cljc' | sed 's|^\./|test/|')"
 
 if want squint; then

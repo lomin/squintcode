@@ -1322,7 +1322,7 @@
 ;; expands through that name's registry entry. A literal list, as api-names:
 ;; a top-level def that is not one would ride into every submission (H31).
 (defn ^:macro-support vocabulary-names []
-  '[])
+  '[loop])
 
 (defn ^:macro-support expand-vocabulary
   "A vocabulary macro's expansion: its name's registry entry, called on the

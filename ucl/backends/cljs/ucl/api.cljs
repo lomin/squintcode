@@ -1,7 +1,7 @@
 (ns ucl.api
   "ucl on ClojureScript, run-time half. Requiring its own macros is what lets a
    client write one plain (:require [ucl.api :as ucl])."
-  (:refer-clojure :exclude [make-array min max defmethod let dotimes])
+  (:refer-clojure :exclude [make-array min max defmethod let dotimes loop])
   (:require-macros [ucl.api]
                    [ucl.contract :as contract]
                    [ucl.js-emit :as js-emit]))
