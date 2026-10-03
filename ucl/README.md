@@ -1127,6 +1127,45 @@ hosts: a closure call per comparison (H56, H57). Only V8's typed sort without
 a comparator wins, and only for numbers in ascending order. Dart's own sort is
 the slowest choice even without a comparator (H71). → I40.
 
+### 9.14 The solutions ported to `ucl/loop` (`bench/loop-ports/`)
+
+D62: every solution with a loop, ported to `ucl/loop` beside its original
+(`src/squintcode/*_loop.cljc`), both built as submissions (safety 0), the
+builds kept in `bench/loop-ports/{js,dart}`. Inputs as §9.7, plus 2762 at
+n = 10⁵ (values 1..5). Warm medians, µs: V8 (Node 24.16.0) 7 fresh processes
+each, Dart 3.13.5 (arm64) 5. Every pair returns the same answer.
+
+| problem | V8 original → port | Dart JIT | Dart AOT |
+|---|---|---|---|
+| 412 fizzBuzz | 98 → 90 | 484 → 489 | 378 → 406 |
+| 121 maxProfit | 122 → **136** | 421 → **99** | 438 → **131** |
+| 303 NumArray | 42 → 44 | 36 → 36 | 35 → 34 |
+| 560 subarraySum | 728 → 643 | 343 → 329 | 1076 → 996 |
+| 930 numSubarraysWithSum | 89 → 91 | 103 → 109 | 101 → 100 |
+| 19 removeNthFromEnd | 554 → 531 | 463 → 464 | 582 → 739 |
+| 2762 continuousSubarrays | 1257 → 1342 | 800 → 783 | 995 → 1043 |
+
+Run to run the same pair varies by about ±8% (2762 on V8 measured +4% to
++9% in three runs, fizzBuzz AOT −1% to +7%, 19 AOT 0% to +27%). Beyond that:
+
+- **On Dart the ports win where the original's loop values are untyped**:
+  ClojureDart leaves a `loop` parameter `dynamic` unless hinted, and
+  `ucl/loop` hints its counters and typed accumulators (I30) -- 121 runs 3–4×
+  faster. The originals are the slow ones (the sequence functions found the
+  same, I41's `count-if`).
+- **121 on V8, +13%, is the source, not the expansion.** The port says
+  `minimize p into lo` then `maximize (- p lo)`: the profit waits for the new
+  low. The original computes both from the previous low. Hand-written
+  JavaScript (`exp/`), one difference at a time: the port's order 137 µs,
+  the original's 120 -- each with `Math.max`; the first-value flags cost
+  nothing measurable.
+- **What the expansion did cost, and no longer does**: a ternary for
+  `maximize` where I6 gives `Math.max` (160 → 120 on 121's dataflow; I31); a
+  first-value flag beside `Math.max` -- 659 µs, a V8 deoptimization (I31); a
+  fresh local aliasing a vector the body also reads by name (2762: 1238 →
+  1485, I32); a second counter in step with the `across` index (2762, 303,
+  I33).
+
 ## 10. Host facts
 
 Everything here was established by compiling and running, not by reading docs.
@@ -1361,6 +1400,13 @@ Found while building `ucl/loop` (SBCL 2.2.9, ECL 21.2.1):
   returns 0, and `finally` sees each `for` name's last value -- the stepped
   value that failed its end test, a later clause not stepped
   (`for i from 1 to 3 for j = (* i 10)` ends with `i` 4, `j` 30).
+- **H65** — A `maximize`/`minimize` declared `fixnum` starts, in SBCL and
+  ECL, at `most-negative-fixnum`/`most-positive-fixnum` with no first-value
+  flag: accumulating nothing -- an empty loop, a `when` never true, an `into`
+  variable -- returns it. Untyped it starts at 0 and takes the first value.
+  Declared `(signed-byte 53)` they disagree: SBCL signals a type error, its
+  start not being of the type, even when values come; ECL returns its own
+  `most-negative-fixnum`.
 
 Found by the native bulk-operation measurement (§9.13; Node 24.16.0, Dart 3.13.5):
 
@@ -1480,9 +1526,13 @@ Made while building v1, not in the grilling session; each is reversible.
 | I24 | `expand-counted-loop` -- `dotimes`' loop without its parsing (and, with D56, without its block) -- is the counted iteration every vocabulary expands to | a sequence function's inlined `fn` must not see a `nil` block of ucl's own (D56) |
 | I25 | A block is compiled eagerly by the form that establishes it (`ucl/block`, `ucl/defun`, `ucl/defmethod`, `ucl/dotimes`), outside in: an exit in return position is its value; in statement position the rest of the body moves into the branch that does not exit -- unless it would be copied (several branches complete normally), shadowed (a `let`), or repeated (a loop; a literal rest joins the loop's normal ends instead). Otherwise the exit assigns an internal result and flag and the rest is guarded. A block nothing exits from is its body unchanged | the exit `(when c (return-from f i))` in a loop compiles to JavaScript's `return i` -- read in the kernels' build; every existing submission builds identical |
 | I26 | `defapi` defines a macro for each of `vocabulary-names` -- a literal list every vocabulary adds its names to -- that expands through its registry entry (`expand-vocabulary`), without `:applies?` | one place for the API surface (D26) of `ucl/loop` and the sequence functions; agreed with the sequence-functions session |
-| I27 | `ucl/loop` expands to one Clojure `loop` whose parameters are the `for` names, the internal counters, the default accumulator and `maximize`/`minimize` first-flags; each iteration runs the main clauses in order, then each `for` clause's step and end test, as Common Lisp orders them -- the same tests run once on the first values before the loop. A conditional binds its test (`it`) and a then/else local, and guards each clause under it; a value is read once, a `with`/`into` name assigned with `ucl/setf`. The epilogue (`finally`, the value) is copied to every end test, where every name it reads is bound -- no variable carries a value out of the loop | the 930 kernel's JavaScript is the hand-written loop: one `while`, one ternary per guarded `sum`, no IIFE; SBCL and ECL print the same `finally` values (H64) |
+| I27 | `ucl/loop` expands to one Clojure `loop` whose parameters are the `for` names (an `across` element excepted, I30), the internal counters, the default accumulator and the untyped `maximize`/`minimize` first-flags (I31); each iteration runs the main clauses in order, then each `for` clause's step and end test, as Common Lisp orders them -- the same tests run once on the first values before the loop. A conditional binds its test (`it`) and a then/else local, and guards each clause under it; a value is read once, a `with`/`into` name assigned with `ucl/setf`. The epilogue (`finally`, the value) is copied to every end test, where every name it reads is bound -- no variable carries a value out of the loop | the 930 kernel's JavaScript is the hand-written loop: one `while`, one ternary per guarded `sum`, no IIFE; SBCL and ECL print the same `finally` values (H64) |
 | I28 | An expansion writes ucl's forms through the alias the caller wrote `ucl/loop` with (`ucl/elt`, `ucl/let`, `ucl/block`), and they expand later where the environment is right (I23) | they resolve exactly as the caller's own code; no host needs a fully qualified macro name |
 | I29 | Conformance (D60) is `ucl/conformance.clj`: every `(is (= expected form))` in a `deftest` named `*-conformance-test` is translated to Common Lisp -- ucl's names through the alias, vectors, numbers, booleans and a table of Clojure functions; anything else fails the run -- evaluated per case on SBCL and ECL, and its printed value compared with `expected`. The four hosts run the same assertions as tests, so all six agree. `ucl/run-tests.sh` runs it as a fifth host, `cl` | the cases are written once, where they already are; any vocabulary (the sequence functions too) joins by naming a deftest |
+| I30 | `ucl/loop` hints its loop parameters through `:types :local-hint` (I20): the `across` index, a counter from an integer by an integer, `repeat`, a `count`, an accumulator declared `of-type`; a value accumulated into a typed accumulator is bound to a hinted local first. The `across` element is no parameter: read at the top of each iteration, it takes the vector's element type | ClojureDart types a loop local only from a hint; a `dynamic` value added into an `int` cell does not even pass `dart analyze` |
+| I31 | A `maximize`/`minimize` declared `fixnum` -- default or `into` -- starts at `ucl/most-negative-fixnum`/`most-positive-fixnum` with no flag, as SBCL and ECL (H65), through the backend's `max`/`min` (I6: `Math.max` for an expression); untyped it keeps the first-value flag; declared `(signed-byte 53)` it is rejected (D60) | §9.14: the ternary and the flag were 121's cost on V8 |
+| I32 | A form `ucl/loop` evaluates once (a limit, a step, an `across` vector) is bound to a local only when it is neither a literal nor a symbol the loop's own code assigns | aliasing a vector V8 also sees by name cost 2762 ≈15% (§9.14); only the loop's code can assign a variable while it runs |
+| I33 | A count from an integer `c` by 1, with no limit, beside an `across` is that index plus `c` -- no counter of its own -- unless `finally` or another `for` clause reads it | it steps in lockstep with the index; there the order of steps would show |
 | I40 | D45 per operation (§9.13): JS `fill` is `.fill` (either container); JS `replace` and Dart `replace` copy natively when both vectors are typed (`set`/`setRange`, checked at run time), else loop; `subseq`/`copy-seq` are `.slice`/`.sublist`; `sort`/`stable-sort` expand to one shared bottom-up merge sort with the predicate inlined, except JS with `<` (or `#'<`) on a `fixnum-vector`/`sb53-vector` that is a typed array at run time, which calls the native sort; Dart `fill` and everything on the JVM expand to loops | the measurement: native wins only where it copies memory or sorts typed numbers without a comparator; a run-time `ArrayBuffer.isView` check because a declared `fixnum-vector` may be a plain `Array` (H70) |
 | I41 | A sequence function's registry entry applies only to a call through a namespace other than Clojure's own, with every argument: entries are keyed by bare name, and `(count v)` or `(reduce + xs)` in a `ucl/let` body is Clojure's. A curried form is a function value, bound, not tailed | the walker and D35 must not expand Clojure's namesakes; clients always use the alias (D25) |
 | I42 | A literal `fn`'s body is written into the loop with its continuation -- the `if` of a test, the `recur` of a fold -- pushed into the tail of its `let`s and `do`s, unless a name the body binds occurs in the continuation's code; then the body stays an expression | written as it is, an `if` test or a `recur` argument ending in `let` is an expression-position `let`: an IIFE per element on Squint (H22) |
@@ -1664,9 +1714,10 @@ backend selection by source root; mutable host collections only.
   - Not built yet: hash-table iteration (`being the hash-keys`, D58),
     `loop-finish`, and parallel stepping (`for … and …`). Each is rejected
     with a message saying so.
-  - The cost of an exit through a nested loop (one flag test per outer
-    iteration) and of a hash-table iteration step on each host is reasoned,
-    not measured; the ports measure both (D62).
+  - The ports (§9.14) are equal or faster on Dart; on V8 121 is +13% for its
+    clause order, and 2762 +4–9%, near the run-to-run spread. No port leaves
+    a nested loop, so the cost of that exit's flag is still unmeasured; nor
+    is a hash-table iteration step (D58, not built).
   - An exit is static only (D55): `(return x)` inside an `fn`, an argument, a
     binding's init or a test does not compile; nor inside `and`/`or`,
     `when-let` and the other Clojure forms the block compiler does not know
@@ -1752,6 +1803,8 @@ was a claim made without compiling or measuring first.
 | "ClojureDart's `and` costs ≈18% under the JIT" (H48, recorded as an open item) | The `late` on the local it forks into did (H54); every `if` in expression position paid it. Measured by removing one difference at a time, then fixed (D43). |
 | The prototype's typed `dotimes` counter | Overloaded `:hint`'s parameter count with `:local`: the JVM backend would have thrown, and Clojure refuses a hint there anyway. Became `:local-hint` (I20) before it shipped. |
 | Before the probe: "a function V8 inlines -- one closure, one call site -- costs close to nothing" | Only when the closure assigns nothing: one that assigns `ucl/let` variables costs 2–7× even inlined (§9.10, H58). |
+| D62's first measurement: "the maxProfit port is 43% slower because of `ucl/loop`'s first-value flags" | Removing them changed nothing (167 µs). The ternary where I6 emits `Math.max` was most of it, and the rest the port's own clause order (§9.14). |
+| `ucl/loop`'s first conformance case for an empty typed `maximize`: 0 | SBCL and ECL return `most-negative-fixnum` (H65); ucl now does too (I31). |
 | `ucl/loop`'s first suite: eight of 58 expected values, written by hand | Wrong -- `for i from 10 above 1 by 3` sums 21, not 22; `return it` returns the test's value `T` -- and the implementation right. SBCL and ECL, running the same cases (I29), said so before any of it was committed. |
 | D55 as designed: "an exit inside an inner Clojure `loop` is a compile-time error" | Any loop can be left statically: it ends by not recurring, with a flag when code follows it (I25). Found while implementing; the restriction was never needed. |
 | `ucl/loop` grilling: "`minimize p of-type fixnum into lo`" | The type follows `into`: `minimize p into lo of-type fixnum`. SBCL refused the first; found by running §4.3's examples on SBCL and ECL before writing them down. |
