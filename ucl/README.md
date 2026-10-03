@@ -1,9 +1,16 @@
 # `ucl` — Uncommon Lisp
 
-**Status:** design agreed (grilling session, 2026-10-03), and validated on a
-fourth host, ClojureDart, by a spike (§14). Implementation pending.
-The predecessor, `setf/`, is still the code in this repository; it is replaced
-in one step when `ucl` v1 is built (D27).
+**Status:** v1 implemented (2026-10-03). Design agreed in a grilling session,
+validated on a fourth host, ClojureDart, by a spike (§14), then built: the
+library, its suite on three hosts, every solution ported, `macros.cljc` and the
+predecessor `setf/` deleted (D27). Implementation-time decisions are I1–I9
+(§11); what implementing taught is H27–H33 (§10) and §15.
+
+```bash
+ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint
+bb test                    # that, then every solution on all three hosts
+bb build                   # LeetCode submissions: Squint, safety 0
+```
 
 This document is the design of record. It says what `ucl` is, the rules every
 decision is measured against, each decision and what decided it, the
@@ -31,20 +38,40 @@ platform internally.
   (:require [ucl.api :as ucl]))
 
 (ucl/defun numSubarraysWithSum (nums goal)
-  (declare (type fixnum-vector nums))
+  (declare (type simple-vector nums))
   (let [n    (ucl/length nums)
-        freq (ucl/make-array (inc n) :element-type 'fixnum :initial-element 0)]
+        freq (ucl/make-array (inc n) :element-type 'fixnum)]
     (ucl/setf (ucl/elt freq 0) 1)
-    (loop [i 0, sum 0, result 0]
+    (loop [i 0 running-sum 0 result 0]
       (if (< i n)
-        (let [sum (+ sum (ucl/elt nums i))]
-          (ucl/incf (ucl/elt freq sum))
-          (recur (inc i) sum (+ result (let [w (- sum goal)] (if (>= w 0) (ucl/elt freq w) 0)))))
+        (let [running-sum (+ running-sum (ucl/elt nums i))
+              want        (- running-sum goal)
+              result      (if (>= want 0) (+ result (ucl/elt freq want)) result)]
+          (ucl/incf (ucl/elt freq running-sum))
+          (recur (inc i) running-sum result))
         result))))
 ```
 
-On Squint every `ucl/…` form above compiles to a direct JS operation on an
-`Int32Array`; on the JVM to a direct `int[]` access.
+`bb build` turns that into this submission -- the whole file, nothing of `ucl`
+left in it:
+
+```js
+var numSubarraysWithSum = function(nums, goal) {
+  const n_1 = nums.length;
+  const freq_2 = new Int32Array(n_1 + 1);
+  freq_2[0] = 1;
+  let i_3 = 0; let running_sum_4 = 0; let result_5 = 0;
+  while (true) {
+    if (i_3 < n_1) {
+      const running_sum_6 = running_sum_4 + nums[i_3];
+      const want_7 = running_sum_6 - goal;
+      const result_8 = want_7 >= 0 ? result_5 + freq_2[want_7] : result_5;
+      freq_2[running_sum_6] = freq_2[running_sum_6] + 1;
+      ...
+```
+
+On the JVM the same source compiles to direct `int[]` access, with no
+reflection.
 
 ## 2. The rules every decision is measured against
 
@@ -66,15 +93,27 @@ hosts — and the shared code **never branches on host**: no host list, no
 
 ```
 ucl/
-  shared/ucl/contract.cljc      the whole model, names no host; defines `defapi`
-  backends/jvm/ucl/api.clj      emit map + (contract/defapi …)
-  backends/cljs/ucl/api.cljc    emit map + (contract/defapi …)   macro half
-  backends/cljs/ucl/api.cljs                                      runtime half
-  backends/squint/ucl/api.cljc  emit map + (contract/defapi …)   one file
-  test/ucl/…                    one suite, byte-identical on every host
-  testkit/ucl/…                 Squint test macros, LeetCode fixtures
-  bench/                        every measurement in this document
+  shared/ucl/contract.cljc        the whole model, names no host; defapi, defruntime
+  backends/jvm/ucl/api.clj        emit map, run-time half, (contract/defapi …)
+  backends/js/ucl/js_emit.cljc    the JS family's emit map and run-time helpers (I1)
+  backends/cljs/ucl/api.cljc      ClojureScript flavor + (contract/defapi …)   macro half
+  backends/cljs/ucl/api.cljs                                                   run-time half
+  backends/squint/ucl/api.cljc    Squint flavor + (contract/defapi …)          one file
+  testkit/<host>/ucl/test.*       ucl.test: one test vocabulary on every host (I4)
+  testkit/<host>/ucl/leetcode.*   strict ListNode / TreeNode fixtures (D19)
+  test/ucl/*_test.cljc            the suite -- byte-identical on every host
+  run-tests.sh                    run it on all three hosts; any failure fails
+  bench/                          every measurement in this document
 ```
+
+Source roots per host -- exactly one backend each:
+
+| host | roots |
+|---|---|
+| Clojure/JVM | `shared` `backends/jvm` `testkit/jvm` |
+| ClojureScript | `shared` `backends/js` `backends/cljs` `testkit/cljs` |
+| Squint | `shared` `backends/js` `backends/squint` `testkit/squint` |
+| Squint, submission | `shared` `backends/js` `backends/squint` -- never the test kit |
 
 - **A backend is an emit map** (D26). `ucl.contract/defapi` generates every API
   name — arities, docstrings, macro-vs-function behaviour — from the shared
@@ -88,8 +127,13 @@ ucl/
 - **Every contract fn a macro calls is tagged `^:macro-support`.** ClojureDart
   needs it to make the fn available at expansion time (H20); everywhere else it
   is inert metadata. It is host knowledge in shared code, but not a branch.
-- **Backends exclude the `clojure.core` names they define**, e.g.
-  `(:refer-clojure :exclude [make-array])`.
+- **Backends exclude the `clojure.core` names they define**:
+  `(:refer-clojure :exclude [make-array min max defstruct defmethod])`.
+- **Macro-time code must not reach a submission.** Squint compiles the contract
+  and the JS emitter to modules too, and the backend imports them; esbuild's tree
+  shaking drops them only if every top-level `def` has a literal value. A table
+  of quoted lists compiles to `list(..)` calls and is kept (H31) -- so such
+  tables are functions. `bb build` fails if a submission contains any of it.
 - **Backend selection is a source-root convention.** Every backend declares the
   same namespace, `ucl.api`; each target's build puts exactly one backend
   directory on its path. Two on one path: the first silently wins (H11). This is
@@ -120,7 +164,7 @@ meaning.
 | `(ucl/gethash key table [default])` | read; key first, as in Common Lisp | D2, D6 |
 | `(ucl/slot-value obj 'slot)` | read a slot; the quoted name is consumed at compile time | D6 |
 | `(ucl/setf place v)` `(ucl/incf place [d])` `(ucl/decf place [d])` | assign / read-modify-write any of the places above | D6 |
-| `(ucl/min a b …)` `(ucl/max a b …)` | inline comparisons in call position; functions as values | D21 |
+| `(ucl/min a b …)` `(ucl/max a b …)` | inline in call position; functions as values (`(reduce ucl/max …)`) | D21 |
 | `ucl/most-positive-fixnum` `ucl/most-negative-fixnum` | ±2³¹ bounds (D10) | D23 |
 | `ucl/double-float-positive-infinity` `…-negative-…` | the SBCL/ECL extension names | D23 |
 | `ucl/defun` + `(declare (type …))` | function with type declarations | D18 |
@@ -134,11 +178,17 @@ compile to a plain `while` on every host and need no contract code. `aloop` and
 `=` to a variadic deep-equality call even for two numbers (H13).
 
 **Every form evaluates each runtime argument exactly once, left to right**, and
-generated bindings are `gensym`s, so a caller's local is never captured. Only
-*expressions* are bound; a symbol or a literal is used as it is. Binding those
-buys nothing and costs an IIFE on Squint wherever the form sits in expression
-position (H22): with it, `(+ (ucl/elt a 0) (ucl/elt a 1))` compiles to
-`a[0] + a[1]`.
+generated bindings are `gensym`s, so a caller's local is never captured. But a
+`let` in expression position is an IIFE on Squint, and an IIFE in a hot loop
+costs 8x (§9.6, H22). So nothing is bound that need not be:
+
+- A backend declares, per operation, whether its host code already evaluates
+  each argument once and in order (`:read-once?`, `:write-once?`). JS `a[i]`,
+  `a[i] = v` and a helper call all do; the contract then passes the forms
+  through unbound.
+- Otherwise only *expressions* are bound; symbols and literals are used as is.
+- `min`/`max` on JS: an inline ternary when every argument is a symbol or
+  literal, `Math.min`/`Math.max` otherwise -- never a `let` (§9.6).
 
 ### Not in v1
 
@@ -181,8 +231,14 @@ dispatch disappears wherever it matters:
 | host | declared type | undeclared |
 |---|---|---|
 | Squint | `x[i]` | `x[i]` — a vector literal *is* a JS array |
-| JVM | direct `int[]` / `long[]` / `Object[]` access | `.get ^java.util.List` (covers vectors, `ArrayList`); an undeclared primitive array warns (D4) |
-| ClojureScript | `aget` | one `array?` branch |
+| JVM | direct `int[]` / `long[]` / `Object[]` access; `.get` on a known `List` or vector literal | `nth`, with a compile-time warning (D4) |
+| ClojureScript | `aget` | a helper with one `vector?` branch |
+
+"Declared" means anything the backend can learn at expansion time: a
+`(declare (type …))`, a local the compiler typed (a `let` bound to
+`ucl/make-array`), a `:tag` on the form, or -- on the JVM -- a nested macro form
+whose expansion carries a `:tag` (H30). At safety ≥ 1 every JS access goes
+through a checking helper instead (§8).
 
 Data literals therefore work where they appear in practice: as
 `:initial-contents [...]`, as the input of a converter the caller chooses
@@ -226,10 +282,17 @@ time, non-literal keys get the cheapest runtime normalization the host needs —
 | host | non-literal key |
 |---|---|
 | Squint | nothing (keywords are strings) |
-| JVM | `(if (instance? Integer k) (long k) k)`, skipped when the type is known |
-| ClojureScript | `(if (keyword? k) (.-fqn k) k)` |
+| JVM | `(ucl.api/hash-key k)`: an `Integer` becomes a `long`; skipped for literals and `long`/`String` locals |
+| ClojureScript | `(ucl.api/hash-key k)`: a keyword becomes its name; a literal keyword is its name at compile time |
 
 Keys come back out normalized; that matters only once iteration exists.
+
+On JS, `gethash` and its `setf` compile to two tiny helpers,
+`get-or-default(k, m, d)` and `puthash(k, m, v)`: one function call each, no
+`let`, so no IIFE in expression position; V8 inlines them (§9.6). The read is
+exact Common Lisp: only a missing key (`undefined` from `Map.get`) yields the
+default -- a key stored with nil is present. On the JVM, `.getOrDefault` has
+the same semantics.
 
 A missing key returns `default` (nil if omitted). `(incf (gethash k h))` on a
 missing key adds 1 to NIL: SBCL and ECL signal a type-error at default safety,
@@ -246,7 +309,7 @@ positional constructor, and `&aux` computes slots from arguments:
 ```clojure
 (ucl/defstruct (NumArray (:constructor NumArray
                            (nums &aux (prefix-sum (build-prefix-sum nums)))))
-  (prefix-sum nil :type sb53-vector))
+  (prefix-sum nil :type fixnum-vector))
 
 (ucl/defmethod sumRange ((this NumArray) left right)
   (ucl/with-slots (prefix-sum) this
@@ -257,13 +320,23 @@ positional constructor, and `&aux` computes slots from arguments:
 - **JS:** `defmethod` places the body once, on `NumArray.prototype.sumRange` —
   what LeetCode calls. The generic function `sumRange` is a thin wrapper that
   calls `this.sumRange(…)`, so a test calling `(sumRange obj 0 2)` exercises
-  exactly LeetCode's path. `NumArray` is callable with and without `new`, both
-  running the same constructor body.
+  exactly LeetCode's path. `NumArray` is a plain constructor function, callable
+  with and without `new`, both running the same body; it tests `this` with
+  `NumArray.prototype.isPrototypeOf(this)`, not `instance?`, which Squint
+  expands to an IIFE plus a truthiness call. An omitted `&optional` argument is
+  `undefined` and selects the default, as in LeetCode's own classes.
 - **JVM:** a mutable `deftype` field is private (H10), and a `deftype` cannot
-  gain methods after it is defined. So `defstruct` emits a `deftype` plus an
-  accessor interface, and `defmethod` attaches a protocol via `extend-type`.
-  Measured cost: ≈ 3.5 ns per call more than a method inside the `deftype`
-  (§9.4) — JVM only, a test host.
+  gain methods after it is defined. So `defstruct` emits a `deftype` that
+  implements **one small interface per slot name** -- `ucl.slots.S_next` with
+  `next()` and `set_next(v)` -- and `defmethod` attaches a protocol via
+  `extend-type`. Because every struct with a `next` slot implements the same
+  interface, `slot-value` needs no type information at all: no reflection, no
+  fallback, no warning (I2). Measured method cost: ≈ 3.5 ns per call more than a
+  method inside the `deftype` (§9.4) -- JVM only, a test host.
+- **Call constructors as functions** -- `(NumArray nums)` -- in portable code.
+  On the JVM, `new` is a special form that reaches the deftype's slot-positional
+  constructor, which cannot run a BOA lambda list. `new` is how LeetCode calls,
+  and that happens on JS only.
 - `with-slots` resolves bare slot names to `slot-value` in shared code,
   respecting local shadowing.
 - `defmethod` dispatches statically on the first argument's struct only — no
@@ -277,12 +350,23 @@ positional constructor, and `&aux` computes slots from arguments:
 constructed with `new`: on LeetCode they are ES5 constructor functions, and
 calling one without `new` in a strict-mode module throws. So:
 
-- solutions build them with `(new ListNode 0 head)` — a special form on every host;
-- the **test kit ships strict fixtures**: on Squint a real JS class that throws
-  when called without `new`, on the JVM a struct whose slot order equals
-  LeetCode's constructor order (checked at compile time). A solution that omits
-  `new` fails the ordinary shared suite — no Squint-only test is needed;
-- fixtures are never part of a submission.
+- solutions build them with `(new ListNode 0 head)` and name them bare, as
+  LeetCode's globals, with no require;
+- the **test kit ships strict fixtures**, resolved per host the way LeetCode's
+  global is:
+  - Squint: real JS classes, installed on `globalThis`; they throw without `new`;
+  - ClojureScript: strict constructor functions; `ucl.api` declares `ListNode`
+    and `TreeNode` as `cljs.core` names so the bare symbol resolves with no
+    warning (H27);
+  - JVM: `deftype*` classes in the **default package**, which every namespace
+    resolves by bare name (H28), implementing the per-slot interfaces;
+- a test namespace requires `ucl.leetcode` before the solution (the JVM must
+  have the class before it compiles `new ListNode`);
+- a solution that omits `new` fails the ordinary shared suite: it throws on JS
+  and does not compile on the JVM;
+- every constructor argument must be passed: the JVM class has only the
+  all-slots constructor;
+- fixtures are never part of a submission -- `bb build` checks.
 
 ## 8. Safety (D2, D4, D11, D14)
 
@@ -301,14 +385,27 @@ means 1:
 | ClojureScript | a compiler option, read via `cljs.env/*compiler*` |
 | JVM | the system property `-Ducl.safety=0` |
 
+What the checks are, per host:
+
+| check (safety ≥ 1) | JS hosts | JVM |
+|---|---|---|
+| `elt` index in bounds | `elt-checked` / `elt-set-checked` helpers | the host's own (`ArrayIndexOutOfBounds`) |
+| store into `fixnum` / `(signed-byte 53)` vector | the helper checks the value | `(int v)` range-checks; `unchecked-int` at 0 |
+| `incf`/`decf` of a non-number | `check-number` | `check-number` |
+| `vector-push-extend` on a non-adjustable vector | `push-checked` | the host's own |
+| `:initial-contents` length ≠ dimension | `check-contents` (literal: at compile time) | same |
+
 Submission builds (`bb build`, `bb build-one`) use 0; tests use the default.
+`ucl/run-tests.sh` compiles the suite at safety 0 as well and fails if any
+check survives.
 ClojureScript caches compiled namespaces, and changing the setting does not
 invalidate that cache — clean before switching (the `bb` tasks do).
 
 **The JVM warns at compile time whenever it falls back** because a type is
-unknown — `slot-value` on an undeclared receiver (Reflector), `elt` on an
-undeclared primitive array. Nothing else would ever point at those paths
-(`*warn-on-reflection*` cannot see an explicit `Reflector` call, H15).
+unknown -- `elt`, `setf` of `elt`, `length` and `vector-push-extend` on a
+receiver of unknown type compile to `nth` / a dispatching helper / `count`.
+Nothing else would point at those paths. `slot-value` never falls back (I2).
+In test code the warning is expected: a test's locals are rarely declared.
 
 **ClojureScript warnings are build errors.** A macro that fails to resolve is
 only a warning there, so a "green" build can contain broken run-time calls (H3).
@@ -387,9 +484,51 @@ A LeetCode design problem makes ≤ 10⁵ method calls: ≤ 0.35 ms, JVM only. �
 
 ### 9.5 Inherited from `setf` (`bench/curried-readers.clj`)
 
+(The script needs the `setf/` tree, deleted in v1 -- run it from commit `09b676a`.)
+
 A JVM field **write**: `(set! (.x ^Point p) v)` is a real `PUTFIELD` at 1.25×
 generated Java; `Reflector/setInstanceField` ≈ 9×; an unhinted `set!` ≈ 12×.
 A curried field reader on the JVM (reflective) ≈ 15–23× a direct read.
+
+### 9.6 Expression-position costs on Squint (during implementation)
+
+maxProfit-shaped loop, n=10⁵, 5 fresh processes each, µs:
+
+| `min`/`max` compiled as | warm | cold |
+|---|---|---|
+| inline ternary `(p<lo)?p:lo` | ~150 | 700–990 |
+| `Math.min` / `Math.max` | **~123** | 1100–1500 |
+| ternary inside a `let` (an IIFE on Squint) | ~1100 | ~3200 |
+
+subarraySum-shaped loop (LeetCode 560), n=2·10⁴, `gethash` with a default:
+
+| compiled as | warm | cold |
+|---|---|---|
+| `m.get(k) ?? d` (not exact: a stored nil reads as the default) | 540–700 | 1340–1510 |
+| helper `get_or_default(k, m, d)` (exact) | 640–750 | 1390–1820 |
+| `let` + `undefined` check (an IIFE) | 800–870 | 2740–4000 |
+
+The IIFE is what to avoid; the exact helper costs no more than the inexact
+operator. → I3, I6.
+
+### 9.7 The submissions, before and after (`bench/submissions/run.mjs`)
+
+Every solution's LeetCode build under `macros.cljc` (Squint 0.12.193) against
+its `ucl` build (Squint 0.14.211, safety 0). Each variant alone in 7 fresh Node
+processes, loaded as a script as LeetCode loads it; median µs. Every pair
+returns the same answer.
+
+| problem, input | warm before → after | cold before → after |
+|---|---|---|
+| 412 fizzBuzz, n=10⁴ | 154 → **53** | 1899 → **1132** |
+| 303 NumArray, n=10⁴ + 10⁴ queries | 72 → **45** | 1218 → **981** |
+| 121 maxProfit, n=10⁵ | 675 → **122** | 4549 → **1631** |
+| 560 subarraySum, n=2·10⁴ | 602 → 605 | 2356 → **1975** |
+| 930 numSubarraysWithSum, n=3·10⁴ | 121 → **100** | 1133 → **914** |
+| 19 removeNthFromEnd, 10⁵ nodes | 866 → 874 | 8273 → 7960 |
+
+Faster or equal everywhere; the equal pairs are within noise. Bundles shrank
+from 2.0–3.5 KB to 0.7–1.5 KB.
 
 ## 10. Host facts
 
@@ -473,6 +612,33 @@ ClojureDart (`247b3c2`, Dart 3.13.5), found by the §14 spike:
   `(or x 't)` → "Unable to resolve symbol: t"; `(if x x 't)` works. Shared
   contract code must avoid the pattern.
 
+Found while implementing v1 (Squint 0.14.211, ClojureScript 1.12.42):
+
+- **H27** — ClojureScript: a symbol added to `cljs.core`'s `:defs` in the
+  compiler state -- from a macro namespace, when it loads -- resolves bare in
+  every later namespace with no warning, compiling to `cljs.core.ListNode`. A
+  macro can also read any custom compiler option:
+  `(get-in @cljs.env/*compiler* [:options :ucl/safety])`.
+- **H28** — Clojure: `(deftype* ListNode ListNode [..] ..)`, with an unqualified
+  class name, defines a class in the default package, and `(new ListNode ..)`
+  resolves it from any namespace, as a JS global would.
+- **H29** — Squint compiles `defn` and `fn` to `function`, so `this-as` works,
+  and a multi-arity dispatcher passes `this` on with `.call`. `instance?`
+  expands to an IIFE plus `truth_`; a test tagged `^boolean` compiles to a bare
+  `if`.
+- **H30** — Clojure: a macro can `macroexpand` a nested form at expansion time
+  and read the `:tag` its expansion carries; that is how `(ucl/length
+  (ucl/make-array ..))` knows its class.
+- **H31** — esbuild's tree shaking keeps a top-level `var` whose initializer is
+  a call: a quoted list (`list(..)`) or a set literal (`new Set(..)`). Such a def
+  in a module the backend imports rides along into every submission.
+- **H32** — Squint auto-imports a namespace that a macro expansion names fully
+  qualified (`ucl.api/elt-checked` → `import * as ucl_DOT_api`), whatever alias
+  the client used.
+- **H33** — Clojure's syntax-quote qualifies a symbol it cannot resolve with the
+  current namespace: a JVM-side macro emitting `undefined?` (ClojureScript only)
+  produces `ucl.js-emit/undefined?`. Emit host-only names unqualified (`~'undefined?`).
+
 ## 11. Decision log
 
 "Evidence" means a measurement or probe decided it; "user judgement" means it
@@ -507,6 +673,22 @@ was decided on reasoning, with the trade-offs on the table.
 | D26 | `defapi` generates every backend's API surface | evidence (H6, H7) |
 | D27 | Big-bang migration from `macros.cljc` | user judgement |
 | D28 | This README is the design of record; benchmarks are committed | user judgement |
+
+### Implementation decisions (I1–I9)
+
+Made while building v1, not in the grilling session; each is reversible.
+
+| # | Decision | Why |
+|---|---|---|
+| I1 | One JS emit map, `backends/js/ucl/js_emit.cljc`, shared by Squint and ClojureScript through a small flavor map | the two maps were identical but for array literals, locals, keys, arity checks; the contract may not name a host family (§13 item) |
+| I2 | JVM structs implement one interface per slot name | `slot-value` on any struct, typed or not, with no reflection; D4's `slot-value` fallback disappears |
+| I3 | JS `gethash` and its `setf` are helper calls, `get-or-default` / `puthash` | exact CL semantics at the cost of the inexact `??` (§9.6), and no IIFE |
+| I4 | `ucl.test` (`deftest is testing signals-error?`) on every host; on JVM/CLJS it delegates to clojure.test | test files carry no reader conditional -- D5 kept clojure.test, this only names it once |
+| I5 | LeetCode's globals resolve per host: Squint `globalThis`, ClojureScript `cljs.core` names, JVM default-package classes | D19 says `(new ListNode ..)` bare; this is how each host gets there (H27, H28) |
+| I6 | JS `min`/`max`: ternary for symbol/literal arguments, else `Math.min`/`Math.max`; JVM: `:inline` fns | never a `let` (§9.6); one var serves call and value on the JVM |
+| I7 | Solutions declare LeetCode's `number[]` as `simple-vector`; tests build inputs with `make-array` | a declaration is a promise about representation, and LeetCode passes a plain JS Array |
+| I8 | `setf/` deleted with `macros.cljc`; its tests of `aloop`, `aref`, `push-end`, `dict` retired | D27; the `ucl` suite covers the same behaviour under the new names |
+| I9 | Project Squint pinned to 0.14.211; `deps.edn` aliases `:jvm` / `:cljs` select the backend | latest-only rule; backend selection by source root |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -548,14 +730,26 @@ backend selection by source root; mutable host collections only.
 
 - **Resolved by §14:** one plain `(:require [ucl.api :as ucl])` works on all
   four hosts. (ClojureScript exposing declarations to macros mattered only for
-  call-site literal conversion, which D17 dropped.)
+  call-site literal conversion, which D17 dropped.) ClojureScript does expose
+  them -- `(:locals &env)` carries a param's `:tag` -- and the JS emitter uses
+  it to skip the `vector?` branch.
+- **Resolved by I1:** the ClojureScript and Squint emit maps are one, in
+  `backends/js`.
+- **v1 limits found while implementing:**
+  - ClojureScript checks no arity on struct constructors (they are function
+    values, so an omitted `&optional` argument is allowed).
+  - On the JS hosts a constructor named like the struct cannot be combined with
+    other constructors.
+  - `with-slots` walks its body without expanding macros: a user macro that
+    binds a slot's name is not seen as shadowing it.
+  - The JVM fixtures accept only the all-slots constructor (`(new ListNode 1
+    nil)`, not `(new ListNode 1)`).
+- **The ClojureDart spike predates v1.** `prototypes/ucl-cljd` still runs its
+  own copy of the early contract; a ClojureDart backend for v1 would start from
+  this contract plus the spike's H20–H25.
 - **Not yet shown on ClojureDart:** D12 key normalization, D14 safety via
   compiler options (where would a ClojureDart macro read it?), D18 classes, D21
   inline `min`/`max`. The spike covered `elt`, `setf`, `make-array`, `defun`.
-- **The ClojureScript and Squint emit maps are identical.** Heuristic 2 says
-  share them, but `ucl.contract` may not name a host family. A shared
-  "JS-family" emit namespace would be a backend library, not contract — decide
-  at implementation.
 - **Squint internals relied on:** `(:var->ident &env)` (H1) and the `defmacro`
   marker (H6). Latest-Squint-only plus the suite makes a break loud.
 - **No JMH.** JVM numbers rest on simple shapes.
@@ -615,6 +809,10 @@ was a claim made without compiling or measuring first.
 | "`aloop` is slower" (the agent's first 2-of-6 claim) | Also premature: that run did not isolate processes and missed the `range` path and `forv`. §9.2 is the full measurement. |
 | "Tests calling a generic function don't test LeetCode's path" | They do, if the JS generic function only calls the prototype method (§7). |
 | "Bind every runtime argument once" (carried over from `setf`) | Correct, but binding a symbol or literal is pure cost: an IIFE per `elt` read on Squint (H22). Found only by reading the spike's generated JS. |
+| §5 said an undeclared `elt` on the JVM is `.get ^java.util.List` | That throws on an undeclared `Object[]`. Implemented as `nth`, with the D4 warning. |
+| §7 said a BOA constructor runs "with and without `new`" | True on the JS hosts only; on the JVM `new` reaches the deftype's own constructor (§7). |
+| v1's first `incf` on a JVM `gethash` | Passed the new-value form to a write that uses its value twice, so the increment ran twice. Caught by the suite; `incf` now binds the value whenever a backend's write is not evaluate-once. |
+| v1's first submissions | Carried contract code -- a table of quoted lists -- through tree shaking (H31). Caught only by reading a bundle; `bb build` now fails on it. |
 
 The pattern is unchanged from `setf`: every serious error was an inference made
 where a compile or a measurement would have answered the question.
