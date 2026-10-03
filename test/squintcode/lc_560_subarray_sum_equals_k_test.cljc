@@ -3,7 +3,7 @@
             [ucl.api :as ucl]
             [squintcode.lc-560-subarray-sum-equals-k :refer [subarraySum]]))
 
-(defn arr [v] (ucl/make-array (count v) :initial-contents v))
+(defn arr [v] (ucl/make-array (count v) :element-type 'fixnum :initial-contents v))   ; LeetCode's int[]
 
 (deftest subarray-sum-basic-test
   (testing "subarraySum with [1,2,3] and k=3"

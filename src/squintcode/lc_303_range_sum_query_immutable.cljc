@@ -12,7 +12,7 @@
 ;; Space: O(n) for prefix sum array
 
 (ucl/defun build-prefix-sum (nums)
-  (declare (type simple-vector nums))
+  (declare (type fixnum-vector nums))
   (let [n  (ucl/length nums)
         ps (ucl/make-array (inc n) :element-type 'fixnum)]
     (loop [i 0 sum 0]

@@ -25,7 +25,7 @@
 ;; Space: O(n)
 
 (ucl/defun count-steady-stretches (nums gap)
-  (declare (type simple-vector nums) (type fixnum gap))
+  (declare (type fixnum-vector nums) (type fixnum gap))
   (let [n    (ucl/length nums)
         maxq (ucl/make-array n :element-type 'fixnum)
         minq (ucl/make-array n :element-type 'fixnum)]
@@ -60,7 +60,7 @@
           (ucl/incf total (- r left -1)))))))
 
 (ucl/defun continuousSubarrays (nums)
-  (declare (type simple-vector nums))
+  (declare (type fixnum-vector nums))
   (count-steady-stretches nums 2))
 
 (comment

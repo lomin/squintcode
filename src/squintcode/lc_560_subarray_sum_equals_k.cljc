@@ -4,7 +4,7 @@
 ;; For every prefix sum s, count the earlier prefix sums equal to s - k.
 
 (ucl/defun subarraySum (nums k)
-  (declare (type simple-vector nums))
+  (declare (type fixnum-vector nums))
   (let [n    (ucl/length nums)
         freq (ucl/make-hash-table :initial-contents {0 1})]
     (loop [i 0 running-sum 0 result 0]

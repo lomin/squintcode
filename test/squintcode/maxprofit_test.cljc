@@ -3,7 +3,7 @@
             [ucl.api :as ucl]
             [squintcode.maxprofit :refer [maxProfit]]))
 
-(defn arr [v] (ucl/make-array (count v) :initial-contents v))
+(defn arr [v] (ucl/make-array (count v) :element-type 'fixnum :initial-contents v))   ; LeetCode's int[]
 
 (deftest max-profit-test
   (testing "LeetCode examples"

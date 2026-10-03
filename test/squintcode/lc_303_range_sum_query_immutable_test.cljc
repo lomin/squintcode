@@ -3,7 +3,7 @@
             [ucl.api :as ucl]
             [squintcode.lc-303-range-sum-query-immutable :refer [NumArray sumRange]]))
 
-(defn arr [v] (ucl/make-array (count v) :initial-contents v))
+(defn arr [v] (ucl/make-array (count v) :element-type 'fixnum :initial-contents v))   ; LeetCode's int[]
 
 ;; sumRange is the generic function; on the JS hosts it calls the prototype
 ;; method, the path LeetCode's `numArray.sumRange(0, 2)` takes.

@@ -2,7 +2,7 @@
   (:require [ucl.api :as ucl]))
 
 (ucl/defun maxProfit (prices)
-  (declare (type simple-vector prices))
+  (declare (type fixnum-vector prices))
   (let [n (ucl/length prices)]
     (loop [i 0
            min-price ucl/double-float-positive-infinity

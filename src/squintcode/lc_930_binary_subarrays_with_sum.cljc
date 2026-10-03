@@ -5,7 +5,7 @@
 ;; indexed by the sum.
 
 (ucl/defun numSubarraysWithSum (nums goal)
-  (declare (type simple-vector nums))
+  (declare (type fixnum-vector nums))
   (let [n    (ucl/length nums)
         freq (ucl/make-array (inc n) :element-type 'fixnum)]
     (ucl/setf (ucl/elt freq 0) 1)

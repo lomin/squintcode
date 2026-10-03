@@ -4,7 +4,7 @@
             [squintcode.lc-2762-continuous-subarrays
              :refer [count-steady-stretches continuousSubarrays]]))
 
-(defn arr [v] (ucl/make-array (count v) :initial-contents v))
+(defn arr [v] (ucl/make-array (count v) :element-type 'fixnum :initial-contents v))   ; LeetCode's int[]
 
 (defn brute
   "Every (start, end) pair, checked directly."
@@ -41,4 +41,4 @@
 (deftest large-answer-test
   (testing "n(n+1)/2 for 200000 equal readings exceeds a fixnum"
     (is (== 20000100000
-            (count-steady-stretches (ucl/make-array 200000 :initial-element 7) 0)))))
+            (count-steady-stretches (ucl/make-array 200000 :element-type 'fixnum :initial-element 7) 0)))))

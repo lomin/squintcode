@@ -57,7 +57,7 @@ requiring namespaces to pick up changes.
   (:require [ucl.api :as ucl]))
 
 (ucl/defun numSubarraysWithSum (nums goal)
-  (declare (type simple-vector nums))          ; LeetCode's number[] is a plain JS Array
+  (declare (type fixnum-vector nums))          ; LeetCode's int[]: a vector of fixnums
   (let [n    (ucl/length nums)
         freq (ucl/make-array (inc n) :element-type 'fixnum)]   ; Int32Array / int[]
     (ucl/setf (ucl/elt freq 0) 1)
@@ -91,7 +91,11 @@ Rules:
   `defmethod`, `with-slots`, `most-positive-fixnum`, `double-float-positive-infinity`.
   Types: `fixnum` (32-bit everywhere), `(signed-byte 53)`, `fixnum-vector`,
   `sb53-vector`, `simple-vector`. Declare a variable's type: on the JVM an
-  undeclared one is boxed. Details: `ucl/README.md` §4–§8, terms in
+  undeclared one is boxed.
+- Declare LeetCode's `int[]` input `fixnum-vector` -- it is a vector of fixnums,
+  whatever container the host passes (a JS `Array`, a Dart `List<int>`): Dart
+  types its elements `int`, the JVM reads an `int[]`. `simple-vector` is for
+  any other input (strings, nodes). Details: `ucl/README.md` §4–§8, terms in
   `ucl/GLOSSARY.md`.
 - Design problems (`NumArray`, `LRUCache`): `ucl/defstruct` + `ucl/defmethod`.
   A method name that clashes with `clojure.core` (`get`, `next`, `pop`) needs
@@ -109,7 +113,7 @@ Rules:
             [ucl.api :as ucl]
             [squintcode.twosum :refer [twoSum]]))
 
-(defn arr [v] (ucl/make-array (count v) :initial-contents v))   ; LeetCode passes arrays
+(defn arr [v] (ucl/make-array (count v) :element-type 'fixnum :initial-contents v))   ; LeetCode's int[]
 
 (deftest twosum-test
   (testing "LeetCode example"
