@@ -107,7 +107,8 @@ Rules:
   position), `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
   the sequence functions `count` `find` `position` (each with `-if`, `-if-not`),
   `reduce`, `every`, `some`, `notany`, `notevery`, `fill`, `replace`, `copy-seq`,
-  `subseq`, `reverse`, `nreverse`, `sort`, `stable-sort` (keywords as in CLHS; a literal
+  `subseq`, `reverse`, `nreverse`, `sort`, `stable-sort`, `remove`, `delete`,
+  `substitute`, `nsubstitute` (the last four with `-if`, `-if-not`) (keywords as in CLHS; a literal
   `fn` argument is inlined; called short of its sequence, a function of it),
   `defmethod`, `with-slots`, `princ-to-string`, `most-positive-fixnum`,
   `double-float-positive-infinity`.

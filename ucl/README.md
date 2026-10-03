@@ -406,13 +406,21 @@ Dart AOT, 10⁵ elements, `(ucl/reduce ucl/max nums)` 199 → 99 µs and
 `(ucl/reduce + nums :initial-value 0)` 247 → 66 µs; Dart JIT and the other
 hosts unchanged.
 
+**Built: the third slice, first part** -- `remove`, `delete`, `substitute`,
+`nsubstitute`, each with `-if` and `-if-not`, every CLHS keyword included
+(I49). `remove` compacts the kept elements into a copy of its sequence and
+trims the copy only when something went; `delete` compacts the sequence
+itself. Measured against counting first and filling an exact-size copy, n =
+10⁵ on an `Int32Array`/`Int32List`, the copy-and-compact is 25–40% faster on
+V8 and 13–25% on Dart AOT, whether nothing, a few, half or most elements go.
+
 **Checked against the ANSI test suite** (I45, I46; `ucl/ansi/REPORT.md`). Of
-the 1,622 tests the suite has for these 22 functions, 217 use only data ucl
+the 2,525 tests the suite has for these 34 functions, 339 use only data ucl
 has -- vectors of numbers and symbols -- and translate; each passes on the
 four hosts and, translated back by `ucl/conformance.clj`, on SBCL and ECL.
 The rest need lists, bit vectors, characters or strings, or are error tests;
 the report counts each reason. Checking the query slice against the suite
-found four deviations, fixed by I45.
+found four deviations, fixed by I45; the third slice one, fixed by I49.
 
 ### 4.3 `ucl/loop` and blocks (D53–D62) -- built, but hash-table iteration (§13)
 
@@ -1557,6 +1565,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I46 | `ucl/ansi/translate.clj` turns the ANSI test suite (pinned commit) into ucl tests: a Common Lisp reader, a translation of the vector subset (symbols become keywords, `#'f` Clojure's `f`, `values` a vector), a validation of each case on the JVM backend -- a case ucl rejects at expansion becomes a skip with ucl's message, one returning another value is held out and reported -- and output as `*-conformance-test`s, which `ucl/conformance.clj` runs on SBCL and ECL as well. Generated tests are committed; the translator is rerun by hand | the suite is Common Lisp and ucl is not: only a translation can use it; the round trip through SBCL and ECL checks the translation, the four hosts check ucl |
 | I47 | The second slice: a function's sequence may come first (`:seq-pos`), and a curried form splices it back there; `subseq`'s optional end makes only a one-argument call curried. At safety ≥ 1 stores go through the checked `setf` of `elt`, at safety 0 through the backend's `:seqfn` `:fill`, `:replace`, `:subseq` and `:sort-native`, nil where the loop is faster (I40). `replace` within one vector copies downward when its ranges overlap upward; `sort`'s scratch vector is `(copy-seq v)`, of `v`'s kind without a type at expansion (I23); every sequence function checks 0 ≤ start ≤ end ≤ length at safety ≥ 1 | CLHS replace and 17.1.1; I40's measurements; a copy keeps `Int32Array`/`Int32List` without reading the environment |
 | I48 | An expander may read the environment through one backend operation only, `:types :vector-element` -- the declared element type of a vector symbol, `:fixnum` on Dart from its `List<int>` tag, nil on JS and the JVM -- and only for a hint, never for meaning; `reduce` uses it to type its accumulator. The contract makes it safe under early expansion: return-position assignment passes the names its binding forms rebind on the way to a tail, the walker its `:shadowed` names, the block compiler "all"; `vector-element` is not consulted for those (`:rebound`). A narrowing of I23, agreed with the `ucl/loop` session | ClojureDart drops a loop local's inferred type (`emit-loop*`); a typed accumulator is 2–4× on Dart AOT; a stale environment could otherwise hint a rebound name and fail on Dart only, a partial host |
+| I49 | The third slice's first part: `substitute`'s new item comes first (`:new`), so its curried form omits the third argument. `:count` limits the elements changed: nil at run time is all, a negative count none; with `:from-end` the rightmost go. `:from-end` also sets the order the test sees the elements in when there is no `:count`, as in SBCL -- the ANSI suite counts the calls. `remove` compacts into a copy (`subseq` of the sequence, so it has the sequence's kind with no type at expansion, I23) and trims it only when shorter; `delete` compacts in place and returns a fresh vector only when shorter; an absent `:end` or a zero `:start` leaves no tail or head to move | Measured faster than counting first (§4.2); a vector cannot shrink, and CLHS lets `delete` return a fresh one |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1716,10 +1725,11 @@ backend selection by source root; mutable host collections only.
   only at run time fails as a call of nil. A curried form inlined into a
   predicate is a loop in an `if` test: an IIFE on Squint (D51). A curried
   `subseq` takes its start only: `(subseq 1 3)` would read as a call. Not
-  built yet: `remove`, `delete`, `substitute`, `nsubstitute` (with `-if`,
-  `-if-not`), `remove-duplicates`, `delete-duplicates`, `map`, `map-into`,
+  built yet: `remove-duplicates`, `delete-duplicates`, `map`, `map-into`,
   `concatenate`, `make-sequence`, `merge`, `search`, `mismatch`,
-  `(setf subseq)` (D44).
+  `(setf subseq)` (D44). On the JVM, a test host, the copy a function works in
+  (`sort`'s scratch vector, `remove`'s result) is an untyped local: its stores
+  take the dynamic path, with the warning.
 - **Compiler passes** (D51). A sequence function or a `ucl/loop` in
   expression position is an IIFE on Squint (§9.11). A pass over a `ucl/defun`
   body could compute it into a temporary before its statement -- lifting with
