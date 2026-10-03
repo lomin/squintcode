@@ -2,7 +2,7 @@
   "ucl on ClojureScript, macro half (runs on the JVM while ClojureScript
    compiles). The emit map is ucl.js-emit's, in the ClojureScript flavor."
   (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
-                            count find some reduce reverse sort replace subseq])
+                            count find some reduce reverse sort replace subseq remove])
   (:require [cljs.env :as env]
             [ucl.contract :as contract]
             [ucl.js-emit :as js-emit]

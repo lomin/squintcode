@@ -211,6 +211,69 @@
   (testing "a vector with a fill pointer sorts up to its fill pointer"
     (is (= [1 2 3] (contents (ucl/sort (fill-pointered [3 1 2]) <))))))
 
+(ucl/defun drop-small (nums k)
+  (declare (type fixnum-vector nums) (type fixnum k))
+  (ucl/remove-if (fn [x] (< x k)) nums))
+
+(deftest remove-and-delete-test
+  (testing "remove, remove-if, remove-if-not: a fresh vector of the kept elements"
+    (let [v (arr [1 2 3 2 1])]
+      (is (= [1 3 1] (contents (ucl/remove 2 v))))
+      (is (= [1 2 3 2 1] (contents v))))
+    (is (= [5 9] (contents (drop-small (arr [1 5 2 9]) 3))))
+    (is (= [2 4] (contents (ucl/remove-if-not even? (arr [1 2 3 4])))))
+    (is (= [] (contents (ucl/remove-if odd? (arr [1 3])))))
+    (is (= [] (contents (ucl/remove 1 (arr [])))))
+    (is (= [1 2] (contents (ucl/remove 9 (general [1 2]))))))
+  (testing "nothing removed: still a fresh vector"
+    (let [v (arr [1 2]) r (ucl/remove 9 v)]
+      (ucl/setf (ucl/elt r 0) 7)
+      (is (= [1 2] (contents v)))))
+  (testing ":start, :end, :key, :test, :test-not"
+    (is (= [1 2 3 1] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :start 2))))
+    (is (= [1 3 2 1] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :end 2))))
+    (is (= [1 1] (contents (ucl/remove 1 (arr [1 2 3 2 1]) :test <))))
+    (is (= [2 2] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :test-not ==))))
+    (is (= [1 3] (contents (ucl/remove-if odd? (arr [1 2 3 4]) :key inc :start 0)))))
+  (testing ":count, and :from-end with it, removes the leftmost or rightmost"
+    (is (= [1 3 2 1] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :count 1))))
+    (is (= [1 2 3 1] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :count 1 :from-end true))))
+    (is (= [2 3 2 1] (contents (ucl/remove-if odd? (arr [1 2 3 2 1]) :count 1 :from-end nil))))
+    (is (= [1 2 3 2 1] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :count -1))))
+    (is (= [1 3 1] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :count nil))))
+    (is (= [1 2 3 1 4] (contents (ucl/remove 2 (arr [1 2 2 3 2 1 4]) :count 2 :from-end true :end 5))))
+    (let [c 1 fe true]
+      (is (= [1 2 3 1] (contents (ucl/remove 2 (arr [1 2 3 2 1]) :count c :from-end fe))))))
+  (testing "delete: the same result; the sequence may be reused"
+    (is (= [1 3 1] (contents (ucl/delete 2 (arr [1 2 3 2 1])))))
+    (is (= [3] (contents (ucl/delete-if-not odd? (arr [2 3 4])))))
+    (is (= [1 2 3 1] (contents (ucl/delete-if even? (arr [1 2 3 2 1]) :count 1 :from-end true))))
+    (is (= [2 1] (contents (ucl/delete 1 (general [1 2 1]) :count 1))))
+    (is (= [1 3] (contents (ucl/delete 2 (fill-pointered [1 2 3]))))))
+  (testing "curried"
+    (is (= [1 3] (contents ((ucl/remove 2) (arr [1 2 3])))))))
+
+(deftest substitute-test
+  (testing "substitute: a fresh vector; nsubstitute: in place"
+    (let [v (arr [1 2 3 2])]
+      (is (= [1 0 3 0] (contents (ucl/substitute 0 2 v))))
+      (is (= [1 2 3 2] (contents v)))
+      (is (= [1 0 3 0] (contents (ucl/nsubstitute 0 2 v))))
+      (is (= [1 0 3 0] (contents v))))
+    (is (= [0 2 0 4] (contents (ucl/substitute-if 0 odd? (arr [1 2 3 4])))))
+    (is (= [1 0 3 0] (contents (ucl/nsubstitute-if-not 0 odd? (arr [1 2 3 4]))))))
+  (testing "keywords"
+    (is (= [1 0 3 2] (contents (ucl/substitute 0 2 (arr [1 2 3 2]) :count 1))))
+    (is (= [1 2 3 0] (contents (ucl/substitute 0 2 (arr [1 2 3 2]) :count 1 :from-end true))))
+    (is (= [1 2 3 0] (contents (ucl/substitute 0 2 (arr [1 2 3 2]) :start 2))))
+    (is (= [9 9 3 2] (contents (ucl/substitute-if 9 (fn [x] (< x 3)) (arr [1 2 3 2]) :end 2))))
+    (is (= [0 0 3 0] (contents (ucl/substitute 0 3 (arr [1 2 3 2]) :test >))))
+    (is (= [1 2 3 2] (contents (ucl/substitute 0 2 (arr [1 2 3 2]) :count 0)))))
+  (testing "a store outside the element type signals at safety 1"
+    (is (signals-error? (ucl/substitute 3000000000 1 (arr [1 2])))))
+  (testing "curried"
+    (is (= [0 2] (contents ((ucl/substitute 0 1) (arr [1 2])))))))
+
 (deftest curried-form-test
   (testing "a sequence function short of its sequence is a function of it (D48)"
     (is (== 2 ((ucl/count-if odd?) (arr [1 3 4]))))
@@ -261,4 +324,7 @@
   (is (== 4 (k/window-odd-counts (arr [1 2 3 5]) 2)))
   (is (= [1 2 3] (contents (k/sorted-copy (arr [3 1 2])))))
   (is (= [3 2 1] (contents (k/descending (arr [1 3 2])))))
-  (is (= [0 0 1 2] (contents (k/shifted (arr [1 2 3 4]) 2)))))
+  (is (= [0 0 1 2] (contents (k/shifted (arr [1 2 3 4]) 2))))
+  (is (= [1 3] (contents (k/without (arr [1 2 3 2]) 2))))
+  (is (= [-1 2 3] (contents (k/drop-last-negatives (arr [-1 2 -3 3 -4]) 2))))
+  (is (= [0 2 0] (contents (k/clamp-negatives (arr [-1 2 -3]))))))

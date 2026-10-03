@@ -97,7 +97,20 @@
    "reverse"          {:nreq 1 :seq-pos 0 :keys #{}}
    "nreverse"         {:nreq 1 :seq-pos 0 :keys #{}}
    "sort"             {:nreq 2 :seq-pos 0 :keys #{:key}}
-   "stable-sort"      {:nreq 2 :seq-pos 0 :keys #{:key}}})
+   "stable-sort"      {:nreq 2 :seq-pos 0 :keys #{:key}}
+   "remove"           {:nreq 2 :keys #{:from-end :start :end :key :test :test-not :count}}
+   "remove-if"        {:nreq 2 :keys #{:from-end :start :end :key :count}}
+   "remove-if-not"    {:nreq 2 :keys #{:from-end :start :end :key :count}}
+   "delete"           {:nreq 2 :keys #{:from-end :start :end :key :test :test-not :count}}
+   "delete-if"        {:nreq 2 :keys #{:from-end :start :end :key :count}}
+   "delete-if-not"    {:nreq 2 :keys #{:from-end :start :end :key :count}}
+   ;; `:new` -- a new item comes before the item or predicate
+   "substitute"         {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :test :test-not :count}}
+   "substitute-if"      {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}
+   "substitute-if-not"  {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}
+   "nsubstitute"        {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :test :test-not :count}}
+   "nsubstitute-if"     {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}
+   "nsubstitute-if-not" {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}})
 
 (defn ^:macro-support call-shape
   "`:full`, `:curried` (every argument but the sequence), or nil."
@@ -126,6 +139,12 @@
 (defn ^:macro-support usage [fname]
   (case fname
     ("count" "find" "position") (str "(" fname " item sequence &key from-end start end key test test-not)")
+    ("remove" "delete")         (str "(" fname " item sequence &key from-end test test-not start end count key)")
+    ("remove-if" "remove-if-not" "delete-if" "delete-if-not")
+    (str "(" fname " predicate sequence &key from-end start end count key)")
+    ("substitute" "nsubstitute") (str "(" fname " newitem olditem sequence &key from-end test test-not start end count key)")
+    ("substitute-if" "substitute-if-not" "nsubstitute-if" "nsubstitute-if-not")
+    (str "(" fname " newitem predicate sequence &key from-end start end count key)")
     "reduce"                    "(reduce function sequence &key key from-end start end initial-value)"
     ("every" "some" "notany" "notevery") (str "(" fname " predicate sequence &rest sequences)")
     "fill"                      "(fill sequence item &key start end)"
@@ -325,15 +344,19 @@
 ;; count, find, position (and their -if, -if-not)
 ;; ===========================================================================
 
+(defn ^:macro-support predicate-name? [^String fname]
+  (or (.endsWith fname "-if") (.endsWith fname "-if-not")))
+
 (defn ^:macro-support parse-search
-  "Shared front of the item and predicate searches: binds arguments in
-   CLHS order -- the item or predicate, the sequence, then each keyword value
-   as written -- and returns what an expansion needs."
+  "Shared front of the item and predicate functions: binds arguments in
+   CLHS order -- a new item, the item or predicate, the sequence, then each
+   keyword value as written -- and returns what an expansion needs."
   [backend fname form]
   (let [spec        (get (specs) fname)
-        [_ a0 sq & kvs] form
-        if?         (not (contains? #{"count" "find" "position"} fname))
+        [newitem a0 sq & kvs] (if (:new spec) (rest form) (cons nil (rest form)))
+        if?         (predicate-name? fname)
         st          (binder)
+        [st new]    (if (:new spec) (bind st newitem "new") [st nil])
         [st item pred] (if if?
                          (let [[st p] (fn-spec st a0)] [st nil p])
                          (let [[st x] (bind st a0 "item")] [st x nil]))
@@ -348,7 +371,8 @@
         test        (if if?
                       (fn [kv k] (apply-fn pred [kv] (if negate? (fn [t] (k (list 'not t))) k)))
                       (item-test backend fname (:test kforms) (:test-not kforms) item form))]
-    {:st st :v v :s s :e e :from-end (get kforms :from-end) :key (:key kforms) :test test}))
+    {:st st :v v :s s :e e :from-end (get kforms :from-end) :key (:key kforms) :test test
+     :new new :keys kforms}))
 
 (defn ^:macro-support search-loop
   "A search in one direction: `found` builds the return value from the
@@ -580,6 +604,20 @@
                          (counted-statement backend s e false (fn [i] (store v i x))))
                      v))))
 
+(defn ^:macro-support copy-range
+  "A statement copying `n` elements of `src` from `s2` into `dst` from `s1`.
+   `from-end` true or false gives the direction; `:run-time` copies from the
+   end when the vectors are one and the ranges overlap upward, as if through
+   a copy (CLHS replace)."
+  [backend dst src s1 s2 n from-end]
+  (or (native backend :replace dst src s1 s2 n)
+      (let [copy (fn [fe]
+                   (counted-statement backend 0 n fe
+                                      (fn [i] (store dst (list '+ s1 i) (list (api 'elt) src (list '+ s2 i))))))]
+        (if (= :run-time from-end)
+          (list 'if (list 'and (list 'identical? dst src) (list '> s1 s2)) (copy true) (copy false))
+          (copy from-end)))))
+
 (defn ^:macro-support expand-replace [backend form]
   (let [[_ sq1 sq2 & kvs] form
         st         (binder)
@@ -595,18 +633,8 @@
         [st e2]    (bind st e2 "e")
         st         (check-bounds backend st v1 s1 e1)
         st         (check-bounds backend st v2 s2 e2)
-        [st n]     (bind st (list (api 'min) (list '- e1 s1) (list '- e2 s2)) "n")
-        copy       (fn [from-end]
-                     (counted-statement backend 0 n from-end
-                                        (fn [i] (store v1 (list '+ s1 i) (list (api 'elt) v2 (list '+ s2 i))))))]
-    (finish st (list 'do
-                     (or (native backend :replace v1 v2 s1 s2 n)
-                         ;; the same vector, copied up: from the end, as if
-                         ;; through a copy (CLHS replace)
-                         (list 'if (list 'and (list 'identical? v1 v2) (list '> s1 s2))
-                               (copy true)
-                               (copy false)))
-                     v1))))
+        [st n]     (bind st (list (api 'min) (list '- e1 s1) (list '- e2 s2)) "n")]
+    (finish st (list 'do (copy-range backend v1 v2 s1 s2 n :run-time) v1))))
 
 (defn ^:macro-support subseq-form
   "A fresh vector of `v`'s elements in [s, e), of `v`'s kind: the host's
@@ -722,6 +750,104 @@
                  sorted))))
 
 ;; ===========================================================================
+;; remove, delete, substitute, nsubstitute (and their -if, -if-not)
+;; ===========================================================================
+;; `remove` compacts the kept elements into a copy of the sequence, so the
+;; result has the sequence's kind without a type at expansion (I23), then
+;; trims it with a second copy -- only when something was removed. `delete`
+;; compacts the sequence itself: a vector cannot shrink, so a shorter result
+;; is a fresh one (CLHS delete: the result, not the argument, is what counts).
+;; `:from-end` changes the result only with `:count` (CLHS remove): without
+;; one each function makes a single forward pass.
+
+(defn ^:macro-support count-limit
+  "[st limit]: how many elements `:count` lets change, or nil for all. A count
+   that is nil at run time is all; a negative one, none (CLHS remove)."
+  [st kf e]
+  (let [c (get kf :count)]
+    (cond (nil? c)    [st nil]
+          (number? c) [st c]
+          ;; e bounds the number changed: at most e - s elements are
+          :else       (bind st (list 'if (list 'nil? c) e c) "limit"))))
+
+(defn ^:macro-support directions
+  "Both directions only when `:count` makes `:from-end` matter."
+  [p limit build]
+  (if limit (both-directions (:from-end p) build) (build false)))
+
+(defn ^:macro-support expand-remove [backend form]
+  (let [fname     (name (first form))
+        in-place? (.startsWith ^String fname "delete")
+        p         (parse-search backend fname form)
+        {:keys [v s e key test]} p
+        ;; without :end, e is the length and there is no tail to move;
+        ;; with :start 0, no head
+        no-tail?  (nil? (get (:keys p) :end))
+        no-head?  (= 0 s)
+        [st n]    (if no-tail? [(:st p) e] (bind (:st p) (list (api 'length) v) "n"))
+        [st limit] (count-limit st (:keys p) e)
+        dst       (if in-place? v (gensym "dst"))
+        st        (if in-place? st (conj st dst (subseq-form backend v 0 n)))
+        w         (counter backend "w")
+        r         (counter backend "r")
+        tail      (list '- n e)
+        build
+        (fn [fe]
+          (index-loop
+           backend s e fe (cond-> [[w (if fe e s)]] limit (conj [r 0]))
+           (fn [i nxt]
+             (let [el     (gensym "el")
+                   ;; from the end, kept elements fill [w, e) downward
+                   at     (if fe (list 'dec w) w)
+                   keep   (list 'do (store dst at el)
+                                (apply nxt (cond-> [(if fe (list 'dec w) (list 'inc w))] limit (conj r))))
+                   drop   (apply nxt (cond-> [w] limit (conj (list 'inc r))))
+                   tested (apply-key key el (fn [kv] (test kv (fn [t] (list 'if t drop keep)))))]
+               (list 'let [el (list (api 'elt) v i)]
+                     (if limit (list 'if (list '< r limit) tested keep) tested))))
+           (if fe
+             ;; [0, s) moves up to end at w; the result starts there
+             (let [from (if no-head? w (list '- w s))]
+               (list 'if (list '== w s) dst
+                     (if no-head?
+                       (subseq-form backend dst from n)
+                       (list 'do (copy-range backend dst v from 0 s true)
+                             (subseq-form backend dst from n)))))
+             ;; [e, n) moves down to start at w
+             (list 'if (list '== w e) dst
+                   (if no-tail?
+                     (subseq-form backend dst 0 w)
+                     (list 'do (copy-range backend dst v w e tail false)
+                           (subseq-form backend dst 0 (list '+ w tail))))))))]
+    (finish st (directions p limit build))))
+
+(defn ^:macro-support expand-substitute [backend form]
+  (let [fname     (name (first form))
+        in-place? (.startsWith ^String fname "nsubstitute")
+        p         (parse-search backend fname form)
+        {:keys [v s e key test]} p
+        newitem   (:new p)
+        st        (:st p)
+        [st limit] (count-limit st (:keys p) e)
+        dst       (if in-place? v (gensym "dst"))
+        st        (if in-place? st (conj st dst (subseq-form backend v 0 (list (api 'length) v))))
+        r         (counter backend "r")
+        build
+        (fn [fe]
+          (index-loop
+           backend s e fe (if limit [[r 0]] [])
+           (fn [i nxt]
+             (let [el     (gensym "el")
+                   hit    (list 'do (store dst i newitem) (apply nxt (if limit [(list 'inc r)] [])))
+                   miss   (apply nxt (if limit [r] []))
+                   tested (apply-key key el (fn [kv] (test kv (fn [t] (list 'if t hit miss)))))
+                   step   (list 'let [el (list (api 'elt) v i)] tested)]
+               ;; the count used up: the rest stays as it is
+               (if limit (list 'if (list '< r limit) step dst) step)))
+           dst))]
+    (finish st (directions p limit build))))
+
+;; ===========================================================================
 ;; The registry (I23)
 ;; ===========================================================================
 
@@ -747,6 +873,11 @@
                  "reverse"                                    (expand-reverse backend form)
                  "nreverse"                                   (expand-nreverse backend form)
                  ("sort" "stable-sort")                       (expand-sort backend form)
+                 ("remove" "remove-if" "remove-if-not" "delete" "delete-if" "delete-if-not")
+                 (expand-remove backend form)
+                 ("substitute" "substitute-if" "substitute-if-not"
+                  "nsubstitute" "nsubstitute-if" "nsubstitute-if-not")
+                 (expand-substitute backend form)
                  (expand-quantifier backend form))
       (contract/fail! (str "malformed " fname ": " (pr-str form) ". Write " (usage fname)
                            (when-not (:rest spec)

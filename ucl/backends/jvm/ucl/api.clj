@@ -9,7 +9,7 @@
    This namespace defines ucl/let and ucl/dotimes, so it excludes Clojure's
    and spells them clojure.core/let and clojure.core/dotimes."
   (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
-                            count find some reduce reverse sort replace subseq])
+                            count find some reduce reverse sort replace subseq remove])
   (:require [ucl.contract :as contract]
             [ucl.loop :as ucl-loop]
             [ucl.seq :as seq])

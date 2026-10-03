@@ -138,3 +138,18 @@
   (declare (type fixnum-vector nums) (type fixnum k))
   (ucl/replace nums nums :start1 k)
   (ucl/fill nums 0 :end k))
+
+(ucl/defun without (nums val)
+  "remove: compacts into a copy, trims only when something went."
+  (declare (type fixnum-vector nums) (type fixnum val))
+  (ucl/remove val nums))
+
+(ucl/defun drop-last-negatives (nums k)
+  "delete-if with :count and :from-end: the rightmost k."
+  (declare (type fixnum-vector nums) (type fixnum k))
+  (ucl/delete-if (fn [x] (< x 0)) nums :count k :from-end true))
+
+(ucl/defun clamp-negatives (nums)
+  "nsubstitute-if in place."
+  (declare (type fixnum-vector nums))
+  (ucl/nsubstitute-if 0 (fn [x] (< x 0)) nums))

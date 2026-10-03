@@ -1343,7 +1343,9 @@
 (defn ^:macro-support vocabulary-names []
   '[loop count count-if count-if-not find find-if find-if-not
     position position-if position-if-not reduce every some notany notevery
-    fill replace copy-seq subseq reverse nreverse sort stable-sort])
+    fill replace copy-seq subseq reverse nreverse sort stable-sort
+    remove remove-if remove-if-not delete delete-if delete-if-not
+    substitute substitute-if substitute-if-not nsubstitute nsubstitute-if nsubstitute-if-not])
 
 (defn ^:macro-support expand-vocabulary
   "A vocabulary macro's expansion: its name's registry entry, called on the
