@@ -10,8 +10,8 @@
    class (H45) -- what ucl.api's cljs.core declaration does on ClojureScript
    (H27). A test namespace requires ucl.leetcode before the solution.")
 
-(deftype ListNode [^:mutable val ^:mutable next])
-(deftype TreeNode [^:mutable val ^:mutable left ^:mutable right])
+(deftype ListNode [^:mutable val ^:mutable next] :type-only true)
+(deftype TreeNode [^:mutable val ^:mutable left ^:mutable right] :type-only true)
 
 #?(:cljd/clj-host
    (def ^:macro-support bare-names-installed

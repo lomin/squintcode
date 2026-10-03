@@ -140,7 +140,8 @@
               {:class cls :slot-types (into {} (map (juxt :name :type) slots))})
        :cljd nil)
     (list* 'do
-           (list* 'deftype cls fields (method-forms env name))
+           ;; :type-only -- no ->Name factory, which nothing calls
+           (list* 'deftype cls fields :type-only true (method-forms env name))
            (concat
             (for [{cn :name :keys [keys? arities]} constructors]
               (if keys?
