@@ -16,6 +16,10 @@ tests and for LeetCode's Dart submissions -- standalone Dart, no ClojureDart
 runtime, as fast as hand-written Dart (§3, §5, §7, §9.9, D38–D43, I14–I22,
 H39–H54).
 
+**Higher-order functions** (2026-10-03, a probe): can a solution pass a `fn` to
+a function and stay fast? On V8 only with one closure that assigns nothing; on
+Dart never (§9.10, H55–H58). Nothing in ucl changed; §13 records what would.
+
 ```bash
 ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint, ClojureDart
 bb test                    # that, then every solution on all four hosts
@@ -754,6 +758,66 @@ Cells cost nothing (the VM removes a non-escaping one). Element type costs
 ClojureDart forks it into (H54): dropped by the bundler, the ucl build
 measures as hand-written Dart.
 
+### 9.10 Runtime higher-order functions (`bench/hof/`)
+
+The question: can a solution be written at a higher level by passing a `fn`
+to a function, without losing ucl's speed? `probe_hof.cljc` defines `fold` and
+`each` as `ucl/defun`s and writes three kernels with them and, as today, with
+`loop`/`recur`. Both are submission builds (safety 0), n = 10⁵, and every
+variant returns the same answer. V8: each case alone in 7 fresh Node 24.16.0
+processes, the median of 200 warm runs. Dart 3.13.5, arm64: 5 processes.
+"1 closure": only the measured closure ever reaches `fold`/`each`, as when a
+solution calls it once. "2–5": two or five other closures went through first,
+as when a solution calls it with several lambdas.
+
+To build on Dart at all, `f` had to be declared `function`, a type the contract
+lacks: a probe-only patch hinted it as Dart's `Function` (H55). The closure's
+own parameter needed a raw `^int` hint, since a `fn` has no `declare`:
+untyped, it is a `num` stored into an `int` cell, and `dart analyze` refuses it.
+
+V8, warm µs:
+
+| kernel | `loop`/`recur` | `fold`/`each`, 1 closure | 2–5 closures |
+|---|---|---|---|
+| sum | 83 | **81** | 518–527 |
+| count ≥ k (the closure captures `k`) | 109 | **105** | 539–541 |
+| maxProfit (the closure assigns `ucl/let` variables) | 114 | 822 | 810–813 |
+| …the same, `d` bound so `max` is a ternary (`profitEach2`) | 114 | 250 | — |
+
+Dart, warm µs, JIT / AOT (the number of closures made no difference):
+
+| kernel | `loop`/`recur` | `fold`/`each` |
+|---|---|---|
+| sum | 66 / 400 | 1270 / 1140 |
+| count ≥ k | 90 / 462 | 1335 / 1332 |
+| maxProfit | 99 / 430 | 1472 / 1232 |
+
+Hand-written Dart (`hand.dart`), the sum, JIT / AOT: a `for` loop 65 / 64; a
+fold over `int Function(int, int)` 502 / 278; over `dynamic Function(dynamic,
+dynamic)` 502 / 497; over bare `Function`, as ucl builds it, 1211 / 982.
+
+The maxProfit closure on V8, one difference at a time (`closure-vars.mjs`):
+as Squint emits it 830; with `var` for `let` 640; with a ternary for
+`Math.max` 248; the variables in one object instead 283. The loop: 114.
+
+- **V8 inlines a closure only while one reaches the call** (H57): `fold` then
+  costs nothing. A second closure through the same `fold` makes it a real
+  call: 5×.
+- **A closure that assigns `ucl/let` variables** keeps them in V8's context,
+  not in registers: 2.2× at best. `Math.max` on them -- which I6 emits when an
+  argument is an expression -- costs 3× more (H58). In a loop the same
+  `Math.max` is the faster form (§9.6).
+- **Dart does not inline a closure call** (H56), however many closures and
+  however typed: 4–8× hand-written, 3× (AOT) to 15–20× (JIT) as ucl builds
+  it. LeetCode's Dart runtime, mostly its harness (§9.9), would not show a
+  millisecond, but it is not free.
+
+So a function that receives `fn`s at run time is cheap only on V8 and only with
+one closure that assigns nothing. A sequence function that inlines a literal
+`fn` at expansion -- the pattern by which `ucl/min` inlines in call position
+and is a function as a value (D21, H8) -- would generate the loop itself and
+pay none of this. It is not built (§13).
+
 ## 10. Host facts
 
 Everything here was established by compiling and running, not by reading docs.
@@ -941,6 +1005,25 @@ Found while adding ClojureDart (`247b3c2`, Dart 3.13.5):
   run time, which the JIT keeps in a hot loop: ≈18% on 2762 (§9.9). Declared
   `T x;`, Dart's definite-assignment analysis proves it at compile time -- in
   all seven solutions -- and refuses to compile what it cannot prove.
+
+Found by the higher-order-function probe (§9.10; Node 24.16.0, Dart 3.13.5):
+
+- **H55** — ClojureDart compiles a call of an untyped local, `(f a b)`, to a
+  three-way test: `f is Function`, else `IFn$iface`, else `IFn.extensions` --
+  the last two in the ClojureDart runtime, so a Dart submission cannot carry
+  it. Hinted `Function`, it is a plain `(f as Function)(a, b)`. A `fn` literal
+  is a plain Dart closure, typed `dynamic` in each parameter.
+- **H56** — The Dart VM does not inline a closure call in a loop, JIT or AOT,
+  however the function type is written: a 10⁵-element fold through `int
+  Function(int, int)` costs 278 µs AOT against a loop's 64. A call through
+  bare `Function` is a dynamic invocation, ≈2× more again.
+- **H57** — V8 inlines the closure a function calls while only one closure
+  reaches that call site; once two others have, the call stays a call: ≈5× on
+  a 10⁵-element fold.
+- **H58** — A `let` a closure assigns lives in V8's context: every access is a
+  memory access with a TDZ check (`var` measures 25% faster), and `Math.max`
+  over such values costs ≈3× a ternary (830 against 248 µs). Why `Math.max`
+  suffers there and not in a loop (§9.6) is unmeasured.
 
 ## 11. Decision log
 
@@ -1146,6 +1229,17 @@ backend selection by source root; mutable host collections only.
   own copy of the early contract.
 - **Squint internals relied on:** `(:var->ident &env)` (H1) and the `defmacro`
   marker (H6). Latest-Squint-only plus the suite makes a break loud.
+- **Higher-order functions** (§9.10). A function that takes a `fn` at run time
+  needs two things ucl lacks: `function` as a declarable type (else the Dart
+  call reaches the ClojureDart runtime, H55) and a `lambda` whose `declare`
+  types its parameters (else Dart refuses an untyped parameter stored into a
+  typed variable). Even with both it costs on Dart (H56) and, past one
+  closure, on V8 (H57). The candidates for raising a solution's level of
+  abstraction are expansion-time: Common Lisp's sequence functions (`reduce`,
+  `count-if`, `map-into`, ...) inlining a literal `fn` and falling back to a
+  function otherwise (D21's pattern), and a `ucl/loop` subset (D33). Neither
+  is built; the variable walker must know them, as it knows `ucl/dotimes`
+  (above).
 - **No JMH.** JVM numbers rest on simple shapes.
 - **The repository split** (`ucl`, `ucl-jvm`, `ucl-cljs`, `ucl-squint`) is laid
   out, not performed.
@@ -1219,6 +1313,7 @@ was a claim made without compiling or measuring first.
 | ClojureDart grilling: "the 2762 Dart build is 20–38% slower than hand-written -- a problem" | Locally, yes; on LeetCode both beat 100% (473 against 487 ms). Its Dart runtime is mostly the harness. |
 | "ClojureDart's `and` costs ≈18% under the JIT" (H48, recorded as an open item) | The `late` on the local it forks into did (H54); every `if` in expression position paid it. Measured by removing one difference at a time, then fixed (D43). |
 | The prototype's typed `dotimes` counter | Overloaded `:hint`'s parameter count with `:local`: the JVM backend would have thrown, and Clojure refuses a hint there anyway. Became `:local-hint` (I20) before it shipped. |
+| Before the probe: "a function V8 inlines -- one closure, one call site -- costs close to nothing" | Only when the closure assigns nothing: one that assigns `ucl/let` variables costs 2–7× even inlined (§9.10, H58). |
 
 The pattern is unchanged from `setf`: every serious error was an inference made
 where a compile or a measurement would have answered the question.
