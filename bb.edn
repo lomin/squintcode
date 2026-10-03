@@ -23,7 +23,7 @@
   ;; ============================================================================
 
   test-ucl
-  {:doc "Run the ucl library suite on Clojure, ClojureScript and Squint"
+  {:doc "Run the ucl library suite on Clojure, ClojureScript, Squint and ClojureDart"
    :task (tasks.lc/test-ucl)}
 
   test-squint
@@ -38,12 +38,17 @@
   {:doc "Run the solution tests on ClojureScript (warnings are errors)"
    :task (tasks.lc/test-cljs)}
 
+  test-cljd
+  {:doc "Run the solution tests on ClojureDart"
+   :task (tasks.lc/test-cljd)}
+
   test
-  {:doc "Run everything: ucl suite, then Squint -> Clojure -> ClojureScript"
+  {:doc "Run everything: ucl suite, then Squint -> Clojure -> ClojureScript -> ClojureDart"
    :task (do (run 'test-ucl)
              (run 'test-squint)
              (run 'test-clj)
              (run 'test-cljs)
+             (run 'test-cljd)
              (println "\n✓ ALL TESTS PASSED ON ALL PLATFORMS"))}
 
   ;; ============================================================================

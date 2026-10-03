@@ -5,7 +5,8 @@
    and nothing else -- backend selection is by source root (ucl/README §3)."
   (:require [babashka.fs :as fs]
             [babashka.process :refer [shell]]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [tasks.dart :as dart]))
 
 (def ^:private squint "node_modules/.bin/squint")
 (def ^:private esbuild "node_modules/.bin/esbuild")
@@ -121,6 +122,36 @@
     (spit bundle (strip-exports (slurp bundle)))
     (sh! "node" bundle)))
 
+;; ClojureDart builds a project: ucl/cljd-project is its template, every
+;; source root is copied into src/ (tools.deps no longer takes paths outside a
+;; project), and the Dart packages stay between runs.
+
+(def ^:private dart-sdk (or (System/getenv "DART_SDK") (str (fs/home) "/.local/dart-sdk")))
+
+(defn- cljd-project! [dir roots]
+  (fs/create-dirs dir)
+  (doseq [f ["deps.edn" "pubspec.yaml"]]
+    (fs/copy (str "ucl/cljd-project/" f) (str dir "/" f) {:replace-existing true}))
+  (doseq [d ["src" "lib/cljd-out" "test/cljd-out"]] (fs/delete-tree (str dir "/" d)))
+  (doseq [root roots]
+    (fs/copy-tree root (str dir "/src") {:replace-existing true}))
+  dir)
+
+(defn- cljd! [dir jvm-opts & args]
+  (apply sh! {:dir dir :extra-env {"PATH" (str dart-sdk "/bin:" (System/getenv "PATH"))}}
+         "clojure" (concat jvm-opts
+                           ["-M" "-i" (str (fs/absolutize "ucl/cljd-project/report.clj"))
+                            "-m" "cljd.build"]
+                           args)))
+
+(defn test-cljd
+  "The solutions' tests on ClojureDart: cljd.test, run by `dart test`."
+  []
+  (banner "CLOJUREDART")
+  (let [dir (cljd-project! "out/cljd-test" ["ucl/shared" "ucl/backends/cljd" "ucl/testkit/cljd"
+                                            "src" "test"])]
+    (apply cljd! dir [] "test" (test-nses))))
+
 (defn test-ucl []
   (banner "UCL LIBRARY SUITE")
   (sh! "ucl/run-tests.sh"))
@@ -166,6 +197,27 @@
                       " expression position; bind its value in ucl/let"))))
     (println (str "  " output " (" (fs/size output) " bytes)"))))
 
+(defn- problem-ns [problem] (str "squintcode." (str/replace problem "_" "-")))
+
+(defn- compile-dart-for-submission!
+  "Compile every solution with ClojureDart into out/cljd-build at safety 0.
+   ucl.leetcode comes first: it makes a bare ListNode resolve (ucl H45); the
+   bundler leaves it bare for LeetCode's own."
+  [problems]
+  (let [dir (cljd-project! "out/cljd-build" ["ucl/shared" "ucl/backends/cljd" "src"])]
+    (fs/copy "ucl/testkit/cljd/ucl/leetcode.cljc" (str dir "/src/ucl/leetcode.cljc"))
+    (apply cljd! dir ["-J-Ducl.safety=0"] "compile" "ucl.leetcode" (map problem-ns problems))
+    dir))
+
+(defn- bundle-dart! [dir problem]
+  (let [rel    (str (-> (problem-ns problem) (str/replace "." "/")) ".dart")
+        output (str "out/" problem ".dart")]
+    (try
+      (spit output (dart/bundle (str dir "/lib/cljd-out") rel))
+      (catch clojure.lang.ExceptionInfo e
+        (exit! (str "ERROR: " output ": " (ex-message e)))))
+    (println (str "  " output " (" (fs/size output) " bytes)"))))
+
 (defn- problems []
   (map #(str/replace (fs/file-name %) #"\.cljc$" "") (source-files)))
 
@@ -173,12 +225,15 @@
   (when-not problem
     (exit! "Usage: bb build-one <problem>   e.g. bb build-one fizzbuzz"))
   (println (str "Building " problem " (safety 0)..."))
-  (bundle-problem! (compile-for-submission!) problem))
+  (bundle-problem! (compile-for-submission!) problem)
+  (bundle-dart! (compile-dart-for-submission! [problem]) problem))
 
 (defn build-all []
   (println "Building every problem (safety 0)...")
   (let [dir (compile-for-submission!)]
-    (doseq [p (problems)] (bundle-problem! dir p))))
+    (doseq [p (problems)] (bundle-problem! dir p)))
+  (let [dir (compile-dart-for-submission! (problems))]
+    (doseq [p (problems)] (bundle-dart! dir p))))
 
 (defn clean []
   (doseq [d ["out" "cljs-test-runner-out" ".cljs_node_repl" ".cljsbuild" ".shadow-cljs"]]
