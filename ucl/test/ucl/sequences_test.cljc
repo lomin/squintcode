@@ -107,6 +107,45 @@
       (is (== 1 (ucl/position (note :item 2) (note :seq (arr [1 2 3])) :end (note :end 3) :start (note :start 0))))
       (is (= [:item :seq :end :start] @log)))))
 
+(defn fill-pointered [v]
+  (let [a (ucl/make-array 0 :adjustable true :fill-pointer 0)]
+    (doseq [x v] (ucl/vector-push-extend x a))
+    a))
+
+(deftest keyword-arguments-test
+  (testing "other keys are allowed by a true :allow-other-keys, the leftmost one (CLHS 3.4.1.4.1)"
+    (is (== 2 (ucl/count-if odd? (arr [1 2 3]) :bad 1 :allow-other-keys true)))
+    (is (== 2 (ucl/count-if odd? (arr [1 2 3]) :allow-other-keys true :bad 1 :allow-other-keys nil)))
+    (is (== 2 (ucl/count-if odd? (arr [1 2 3]) :allow-other-keys nil)))
+    (is (== 6 (ucl/reduce + (arr [1 2 3]) :also-bad 0 :allow-other-keys 7))))
+  (testing "every argument is evaluated, a repeated key and an other key included"
+    (let [log (atom [])
+          note (fn [x v] (swap! log conj x) v)]
+      (is (== 2 (ucl/count-if odd? (arr [1 2 3]) :start (note :s1 0) :start (note :s2 2)
+                              :bad (note :bad 0) :allow-other-keys true)))
+      (is (= [:s1 :s2 :bad] @log))))
+  (testing "the order of evaluation, with :key and :from-end (ansi-test count-if.order.1)"
+    (let [log (atom [])
+          note (fn [x v] (swap! log conj x) v)]
+      (is (== 1 (ucl/count-if (note :pred odd?) (note :seq (arr [1 2 3 4])) :start (note :start 0)
+                              :end (note :end 2) :key (note :key (fn [x] x)) :from-end (note :from-end false))))
+      (is (= [:pred :seq :start :end :key :from-end] @log))))
+  (testing "a quoted symbol and #' name the global function (CLHS 1.4.1.5)"
+    (is (== 2 (ucl/count-if 'odd? (arr [1 2 3]))))
+    (is (== 2 (ucl/count-if #'odd? (arr [1 2 3]))))
+    (is (== 1 (ucl/position 3 (arr [1 2 3]) :key 'inc))))
+  (testing ":key nil is identity (CLHS 17.2.1)"
+    (is (== 2 (ucl/count-if odd? (arr [1 2 3]) :key nil)))
+    (is (== 6 (ucl/reduce + (arr [1 2 3]) :key nil)))))
+
+(deftest fill-pointer-test
+  (testing "a vector with a fill pointer is as long as its fill pointer"
+    (let [v (fill-pointered [1 2 3 4])]
+      (is (== 2 (ucl/count-if odd? v)))
+      (is (== 3 (ucl/position-if even? v :from-end true)))
+      (is (== 10 (ucl/reduce + v)))
+      (is (true? (ucl/every pos? v))))))
+
 (deftest curried-form-test
   (testing "a sequence function short of its sequence is a function of it (D48)"
     (is (== 2 ((ucl/count-if odd?) (arr [1 3 4]))))

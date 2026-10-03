@@ -1470,6 +1470,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I42 | A literal `fn`'s body is written into the loop with its continuation -- the `if` of a test, the `recur` of a fold -- pushed into the tail of its `let`s and `do`s, unless a name the body binds occurs in the continuation's code; then the body stays an expression | written as it is, an `if` test or a `recur` argument ending in `let` is an expression-position `let`: an IIFE per element on Squint (H22) |
 | I43 | Two backend operations, `:seqfn :eql` (Squint `===`, ClojureScript `keyword-identical?`, JVM `Util/equiv`, Dart `==`) and `:seqfn :fail` (the hosts' existing `fail` helpers, an `ex-info` on the JVM) | D52's value equality per host; a run-time error without reaching a host's runtime library on Dart |
 | I44 | An empty `reduce` without `:initial-value` calls its function with no arguments; for an operator that is decided at compile time: `+` is 0, `*` is 1, `-`, `/`, comparisons, `min` and `max` signal at safety ≥ 1 (nil at 0) | H72; ucl's `min`/`max` are macros on some hosts and refuse no arguments when expanded |
+| I45 | Found against the ANSI test suite: `:allow-other-keys` (leftmost wins) admits other keys, whose values are still evaluated; with other keys present its value must be a literal, else a compile-time error; every keyword value is evaluated, a repeated key's too; `'f` and `#'f` (`(var f)`) call the global `f`; a literal nil `:key` is identity | CLHS 3.4.1.4, 3.4.1.4.1, 1.4.1.5, 17.2.1; before, `'identity` was called as a Clojure symbol -- a map lookup, silently wrong |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1624,7 +1625,9 @@ backend selection by source root; mutable host collections only.
   is built; the variable walker must know them, as it knows `ucl/dotimes`
   (above).
 - **Sequence functions, v1 limits.** Keyword arguments must be literal keywords
-  (a macro decides at expansion which it was given). `:start` greater than
+  (a macro decides at expansion which it was given), and so must
+  `:allow-other-keys` when other keys are given (I45); a `:key` that is nil
+  only at run time fails as a call of nil. `:start` greater than
   `:end` is not signalled -- the range is empty -- while CLHS requires an
   error; an `:end` past the length is signalled by `elt` at safety ≥ 1. A
   curried form inlined into a predicate is a loop in an `if` test: an IIFE on

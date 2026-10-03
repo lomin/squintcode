@@ -108,18 +108,33 @@
     (str "(" fname " predicate sequence &key from-end start end key)")))
 
 (defn ^:macro-support parse-keys
-  "The keyword arguments of a call: {:key form ...} with the leftmost
-   occurrence winning (CLHS 3.4.1.4), and every value in written order."
+  "The keyword arguments of a call, in written order, after checking them:
+   a key the function does not take is allowed only when the leftmost
+   `:allow-other-keys` is true (CLHS 3.4.1.4.1). A macro decides that at
+   expansion, so with other keys present the value must be a literal."
   [fname spec kvs form]
-  (loop [kvs kvs, m {}, order []]
-    (if (seq kvs)
-      (let [[k v & more] kvs]
-        (when-not (contains? (:keys spec) k)
+  (let [pairs   (mapv vec (partition 2 kvs))
+        aok     (first (filter #(= :allow-other-keys (first %)) pairs))
+        unknown (remove #(or (contains? (:keys spec) (first %)) (= :allow-other-keys (first %))) pairs)]
+    (when (seq unknown)
+      (let [k (ffirst unknown)
+            v (second aok)]
+        (cond
+          (nil? aok)
           (contract/fail! (str fname " does not take " k ". It takes "
-                               (pr-str (vec (sort (:keys spec)))) " -- " (usage fname))
-                          {:form form}))
-        (recur more (if (contains? m k) m (assoc m k v)) (conj order [k v])))
-      {:keys m :order order})))
+                               (pr-str (vec (sort (:keys spec)))) ", or others with :allow-other-keys true -- "
+                               (usage fname))
+                          {:form form})
+          (not (contract/literal? v))
+          (contract/fail! (str fname " is given " k " with :allow-other-keys " (pr-str v)
+                               ", which is only known at run time. Write :allow-other-keys true, or leave out " k)
+                          {:form form})
+          (or (nil? v) (false? v))
+          (contract/fail! (str fname " does not take " k " (:allow-other-keys is " (pr-str v) ")")
+                          {:form form}))))
+    {:order pairs}))
+
+(defn ^:macro-support literal-nil? [f] (nil? f))
 
 ;; ===========================================================================
 ;; Applying a function argument (D46–D48)
@@ -150,11 +165,20 @@
        (let [spec (get (specs) (name (first f)))]
          (and spec (= :curried (call-shape spec (rest f)))))))
 
+(defn ^:macro-support designator
+  "The function a quoted symbol or `#'f` names: `'f` is Common Lisp's
+   designator for the global function f (CLHS 1.4.1.5), and Clojure reads
+   `#'f` as `(var f)`."
+  [f]
+  (when (and (seq? f) (contains? #{'quote 'var} (first f)) (symbol? (second f)) (nil? (nnext f)))
+    (second f)))
+
 (defn ^:macro-support fn-spec
   "How to apply the function argument `f`, given the binder; returns [st spec]."
   [st f]
   (cond (fn-literal? f)    [st {:kind :inline :form f}]
         (symbol? f)        [st {:kind :call :f f}]
+        (designator f)     [st {:kind :call :f (designator f)}]
         (curried-form? f)  [st {:kind :curried :form f}]
         :else              (let [[st g] (bind st f "f")] [st {:kind :call :f g}])))
 
@@ -215,6 +239,19 @@
 ;; Index loops
 ;; ===========================================================================
 
+(defn ^:macro-support bind-keys
+  "Evaluate every keyword value once, in written order; the leftmost
+   occurrence of a key is the one used (CLHS 3.4.1.4). Keys in `fn-keys` take
+   functions; a literal nil `:key` is identity (CLHS 17.2.1). Returns
+   [st {key ref-or-spec}]."
+  [st order fn-keys]
+  (reduce (fn [[st m] [k f]]
+            (let [use (fn [st x] [st (if (contains? m k) m (assoc m k x))])]
+              (cond (and (= :key k) (literal-nil? f)) (use st nil)
+                    (contains? fn-keys k)             (let [[st x] (fn-spec st f)] (use st x))
+                    :else                             (let [[st x] (bind st f (name k))] (use st x)))))
+          [st {}] order))
+
 (defn ^:macro-support index-loop
   "(loop [i first, state...] (if in-range (body i next) exit)), stepping up
    from `s` below `e`, or down from below `e` to `s` when `from-end`.
@@ -258,16 +295,8 @@
                          (let [[st p] (fn-spec st a0)] [st nil p])
                          (let [[st x] (bind st a0 "item")] [st x nil]))
         [st v]      (bind st sq "v")
-        {:keys [keys order]} (parse-keys fname spec kvs form)
-        ;; every keyword value is evaluated, in written order; the function
-        ;; arguments among them get their own spec
-        [st kforms] (reduce (fn [[st m] [k f]]
-                              (if (contains? m k)
-                                [st m]
-                                (if (contains? #{:key :test :test-not} k)
-                                  (let [[st s] (fn-spec st f)] [st (assoc m k s)])
-                                  (let [[st r] (bind st f (name k))] [st (assoc m k r)]))))
-                            [st {}] order)
+        {:keys [order]} (parse-keys fname spec kvs form)
+        [st kforms] (bind-keys st order #{:key :test :test-not})
         [st s e]    (bounds st v kforms)
         [st s]      (bind st s "s")
         [st e]      (bind st e "e")
@@ -410,13 +439,7 @@
         [st fs]   (fn-spec st f)
         [st v]    (bind st sq "v")
         {:keys [order]} (parse-keys "reduce" spec kvs form)
-        [st kf]   (reduce (fn [[st m] [k x]]
-                            (if (contains? m k)
-                              [st m]
-                              (if (= :key k)
-                                (let [[st s] (fn-spec st x)] [st (assoc m k s)])
-                                (let [[st r] (bind st x (name k))] [st (assoc m k r)]))))
-                          [st {}] order)
+        [st kf]   (bind-keys st order #{:key})
         [st s e]  (bounds st v kf)
         [st s]    (bind st s "s")
         [st e]    (bind st e "e")

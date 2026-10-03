@@ -83,3 +83,14 @@
               (ucl/loop for k being the hash-keys of h sum k))
     (signals? #"parallel stepping\) is not built yet"
               (ucl/loop for x across [1] and y across [2] sum x))))
+(deftest sequence-function-keys-test
+  (testing "a key a sequence function does not take"
+    (signals? #"count-if does not take :bad" (ucl/count-if odd? [1] :bad 1))
+    (signals? #"count-if does not take :bad \(:allow-other-keys is nil\)"
+              (ucl/count-if odd? [1] :allow-other-keys nil :bad 1))
+    (signals? #"only known at run time" (let [a true] (ucl/count-if odd? [1] :bad 1 :allow-other-keys a))))
+  (testing ":test and :test-not together"
+    (signals? #"takes :test or :test-not, not both" (ucl/count 1 [1] :test = :test-not =)))
+  (testing "a malformed call names what to write"
+    (signals? #"malformed position" (ucl/position 1 [1] :start))
+    (signals? #"malformed every" (ucl/every odd?))))
