@@ -107,7 +107,7 @@ Rules:
   whatever container the host passes (a JS `Array`, a Dart `List<int>`): Dart
   types its elements `int`, the JVM reads an `int[]`. `simple-vector` is for
   any other input (strings, nodes). Details: `ucl/README.md` §4–§8, terms in
-  `ucl/GLOSSARY.md`.
+  its glossary (§16).
 - Design problems (`NumArray`, `LRUCache`): `ucl/defstruct` + `ucl/defmethod`,
   in the same namespace (ClojureDart puts the methods inside the class).
   A method name that clashes with `clojure.core` (`get`, `next`, `pop`) needs

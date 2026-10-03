@@ -9,7 +9,7 @@ predecessor `setf/` deleted (D27). Implementation-time decisions are I1–I9
 **Variables** (2026-10-03, a second grilling session): `ucl/let`, `ucl/let*`,
 assignable parameters and `ucl/dotimes`, so that a loop's state needs neither
 `recur` arguments nor an IIFE (§4.1, D29–D37, I10–I13, H34–H38). The terms are
-in [GLOSSARY.md](./GLOSSARY.md).
+in the glossary (§16).
 
 **ClojureDart** (2026-10-03, a third grilling session): a fourth host, for
 tests and for LeetCode's Dart submissions -- standalone Dart, no ClojureDart
@@ -131,7 +131,6 @@ ucl/
   test-jvm/ucl/*_test.clj         expansion-error tests (the JVM can expand a form at run time)
   run-tests.sh                    run it on all four hosts; any failure fails
   bench/                          every measurement in this document
-  GLOSSARY.md                     the terms: variable, local, place, positions
 ```
 
 Source roots per host -- exactly one backend each:
@@ -1158,7 +1157,7 @@ was decided on reasoning, with the trade-offs on the table.
 | D34 | An undeclared JVM variable is an `Object` cell with a warning; declared integer variables are checked on store at safety ≥ 1 | user judgement |
 | D35 | A compound init of `ucl/let` runs as a statement whose return positions assign the variable | user judgement |
 | D36 | `ucl/defun` / `ucl/defmethod` parameters the body assigns are variables (not the `defmethod` instance) | user judgement |
-| D37 | Terms in `GLOSSARY.md`; decisions stay in this log | user judgement |
+| D37 | Terms in a glossary (§16; `GLOSSARY.md` until it moved into this README); decisions stay in this log | user judgement |
 | D38 | ClojureDart is a fourth host for tests **and** LeetCode Dart submissions; a submission is standalone Dart, and a solution may not reach the ClojureDart runtime -- `bb build` fails if it does; the contract grows when a solution needs more (D8) | user judgement, evidence (H50) |
 | D39 | The bundler generates what LeetCode calls, untyped: `class Solution` (one method per function) and, per design problem, a class that runs the BOA constructor and delegates | evidence (H52, §9.9) |
 | D40 | A struct's methods live inside its Dart class, through ClojureDart's two passes | user judgement, evidence (H42) |
@@ -1423,3 +1422,90 @@ was a claim made without compiling or measuring first.
 
 The pattern is unchanged from `setf`: every serious error was an inference made
 where a compile or a measurement would have answered the question.
+
+## 16. Glossary
+
+The language of `ucl`. A term is defined here once; the sections above use it
+in this sense. Implementation belongs in the sections, not here.
+
+### Hosts and the contract
+
+**Contract**:
+The host-agnostic vocabulary and its meaning; every host implements all of it.
+_Avoid_: core, spec
+
+**Host**:
+A language a ucl program runs on: Squint, ClojureScript, Clojure (JVM) or
+ClojureDart.
+_Avoid_: platform, target, dialect
+
+**Submission**:
+The standalone file a host's build produces for LeetCode: JavaScript from
+Squint, Dart from ClojureDart. It contains the solution and nothing of ucl's
+macro time, test kit or a host's runtime library.
+_Avoid_: bundle, build, artifact
+
+**Backend**:
+A host's implementation of the contract.
+_Avoid_: driver, adapter
+
+### Bindings
+
+**Variable**:
+A name bound by ucl that the program can assign with `setf`, `incf` or
+`decf`: one bound by `ucl/let` or `ucl/let*`, by a `ucl/loop` `with` or
+`into` clause, or a `ucl/defun` / `ucl/defmethod` parameter.
+_Avoid_: mutable local, var, cell, atom
+
+**Local**:
+A name bound by Clojure itself (`let`, `loop`, `fn`), or a counter ucl steps
+itself (`ucl/dotimes`' counter, a `ucl/loop` `for` name); it can never be
+assigned.
+_Avoid_: variable (for these), immutable variable, iteration variable (the
+CLHS's name for a `for` name)
+
+**Place**:
+A form that names a storage location `setf` can write: a variable, or an
+`elt`, `gethash` or `slot-value` form.
+_Avoid_: lvalue, reference, accessor
+
+**Block**:
+A named stretch of code that `return-from` leaves with a value: one
+established by `block`, by `ucl/loop` and `ucl/dotimes` (named `nil`, which
+`return` leaves), or by `ucl/defun` / `ucl/defmethod` (named after the
+function).
+_Avoid_: scope, label
+
+**Exit**:
+Leaving a block before its end with `return` or `return-from`.
+_Avoid_: break, early return, non-local return
+
+### Positions
+
+**Statement position**:
+Where a form's value is discarded: any form of a body but the last.
+
+**Return position**:
+Where a form's value becomes the value of the enclosing form: the last form of
+a body, or either branch of an `if` in return position.
+_Avoid_: tail position
+
+**Expression position**:
+Where a form's value is used by another form: an argument, or the init of a
+`let` binding.
+
+### Sequences
+
+**Sequence**:
+A vector: Common Lisp's sequence is a list or a vector, and ucl has no lists.
+_Avoid_: seq (Clojure's lazy sequence), collection
+
+**Sequence function**:
+One of Common Lisp's functions over sequences -- those of CLHS Chapter 17 and
+`every`, `some`, `notany`, `notevery` -- as ucl provides them.
+_Avoid_: seq fn, collection function, higher-order function
+
+**Curried form**:
+A sequence function called with every argument but its sequence; it is a
+function of that sequence.
+_Avoid_: partial application, section
