@@ -757,8 +757,9 @@
 ;; trims it with a second copy -- only when something was removed. `delete`
 ;; compacts the sequence itself: a vector cannot shrink, so a shorter result
 ;; is a fresh one (CLHS delete: the result, not the argument, is what counts).
-;; `:from-end` changes the result only with `:count` (CLHS remove): without
-;; one each function makes a single forward pass.
+;; `:from-end` changes the result only with `:count` (CLHS remove), but the
+;; order the test sees the elements in always, as in SBCL: the suite's tests
+;; count the calls (I49).
 
 (defn ^:macro-support count-limit
   "[st limit]: how many elements `:count` lets change, or nil for all. A count
@@ -769,11 +770,6 @@
           (number? c) [st c]
           ;; e bounds the number changed: at most e - s elements are
           :else       (bind st (list 'if (list 'nil? c) e c) "limit"))))
-
-(defn ^:macro-support directions
-  "Both directions only when `:count` makes `:from-end` matter."
-  [p limit build]
-  (if limit (both-directions (:from-end p) build) (build false)))
 
 (defn ^:macro-support expand-remove [backend form]
   (let [fname     (name (first form))
@@ -819,7 +815,7 @@
                      (subseq-form backend dst 0 w)
                      (list 'do (copy-range backend dst v w e tail false)
                            (subseq-form backend dst 0 (list '+ w tail))))))))]
-    (finish st (directions p limit build))))
+    (finish st (both-directions (:from-end p) build))))
 
 (defn ^:macro-support expand-substitute [backend form]
   (let [fname     (name (first form))
@@ -845,7 +841,7 @@
                ;; the count used up: the rest stays as it is
                (if limit (list 'if (list '< r limit) step dst) step)))
            dst))]
-    (finish st (directions p limit build))))
+    (finish st (both-directions (:from-end p) build))))
 
 ;; ===========================================================================
 ;; The registry (I23)

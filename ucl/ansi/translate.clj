@@ -31,7 +31,10 @@
    "data-and-control-flow/every.lsp" "data-and-control-flow/some.lsp"
    "data-and-control-flow/notany.lsp" "data-and-control-flow/notevery.lsp"
    "sequences/fill.lsp" "sequences/replace.lsp" "sequences/copy-seq.lsp" "sequences/subseq.lsp"
-   "sequences/reverse.lsp" "sequences/nreverse.lsp" "sequences/sort.lsp" "sequences/stable-sort.lsp"])
+   "sequences/reverse.lsp" "sequences/nreverse.lsp" "sequences/sort.lsp" "sequences/stable-sort.lsp"
+   "sequences/remove.lsp"
+   "sequences/substitute.lsp" "sequences/substitute-if.lsp" "sequences/substitute-if-not.lsp"
+   "sequences/nsubstitute.lsp" "sequences/nsubstitute-if.lsp" "sequences/nsubstitute-if-not.lsp"])
 
 (def suites
   {"sequences" {:files sequence-files
@@ -156,7 +159,13 @@
 
 (def sequence-functions
   #{'count 'count-if 'count-if-not 'find 'find-if 'find-if-not 'position 'position-if
-    'position-if-not 'reduce 'every 'some 'notany 'notevery})
+    'position-if-not 'reduce 'every 'some 'notany 'notevery
+    'remove 'remove-if 'remove-if-not 'delete 'delete-if 'delete-if-not
+    'substitute 'substitute-if 'substitute-if-not 'nsubstitute 'nsubstitute-if 'nsubstitute-if-not})
+
+;; a new item before the item or predicate
+(def substitutes
+  #{'substitute 'substitute-if 'substitute-if-not 'nsubstitute 'nsubstitute-if 'nsubstitute-if-not})
 
 ;; the sequence first, then positional arguments, then keywords
 (def sequence-first
@@ -173,7 +182,9 @@
    'aref 'ucl/elt, 'elt 'ucl/elt, 'length 'ucl/length, 'mod 'mod,
    ;; on what the translated cases hold -- numbers, keywords, nil -- Clojure's
    ;; = is eql (tests may use anything; solutions may not)
-   'eql '=, 'eq '=, 'eqt '=, 'equal '=, 'equalt '=, 'equalp '=})
+   'eql '=, 'eq '=, 'eqt '=, 'equal '=, 'equalt '=,
+   ;; equalp compares vectors element by element: the generated `equalp`
+   'equalp 'equalp, 'equalpt 'equalp})
 
 (def special #{'if 'when 'unless 'cond 'and 'or 'progn 'let 'let* 'setf 'incf 'decf 'lambda
                'function 'quote 'values 'locally 'declare})
@@ -256,9 +267,16 @@
 
 (defn tr-call [[h & args :as f]]
   (cond
+    (substitutes h)
+    (let [[new a0 sq & kvs] args
+          item? (contains? #{'substitute 'nsubstitute} h)]
+      (when (nil? sq) (skip "a list (nil, the empty list, as a sequence)"))
+      (when (odd? (count kvs)) (skip "an odd number of keyword arguments (a program-error)"))
+      (list* (symbol "ucl" (name h)) (tr new) (if item? (tr a0) (tr-fn-value a0)) (tr sq)
+             (tr-keyword-args kvs)))
     (sequence-functions h)
     (let [a0 (first args)
-          item? (contains? #{'count 'find 'position} h)]
+          item? (contains? #{'count 'find 'position 'remove 'delete} h)]
       (when (some nil? (if (#{'every 'some 'notany 'notevery} h) (rest args) [(second args)]))
         (skip "a list (nil, the empty list, as a sequence)"))
       (case h
@@ -319,6 +337,11 @@
                          (skip (str "make-array " k))))
                      (partition 2 kvs))))
     (= h 'notnot) (list 'if (tr (first args)) true nil)
+    ;; ansi-aux's predicates of one item
+    (= h 'is-eql-p) (list 'fn '[y] (list '= (tr (first args)) 'y))
+    (= h 'is-not-eql-p) (list 'fn '[y] (list 'if (list '= (tr (first args)) 'y) nil true))
+    ;; a fresh general vector of the values
+    (= h 'vector) (list 'ucl/make-array (count args) :initial-contents (mapv tr args))
     ;; a vector's elements as a list: what `contents` gives as a vector
     (and (= h 'map) (= ''list (first args)) (= '(function identity) (second args)) (= 3 (count args)))
     (list 'contents (tr (nth args 2)))
@@ -433,6 +456,12 @@
 (def validator
   "(ns ansi-validate (:require [ucl.api :as ucl] [clojure.edn :as edn]))
    (defn contents [v] (loop [i 0 acc []] (if (< i (ucl/length v)) (recur (inc i) (conj acc (ucl/elt v i))) acc)))
+   (defn equalp
+   \"Common Lisp's equalp on what the cases hold: vectors element by element.\"
+   [a b]
+   (cond (number? a) (and (number? b) (== a b))
+         (or (nil? a) (keyword? a) (true? a) (false? a)) (= a b)
+         :else (= (contents a) (contents b))))
    (defn ucl-message [t]
      (loop [e t] (cond (nil? e) nil
                        (and (instance? clojure.lang.ExceptionInfo e) (= 'ucl (:library (ex-data e)))) (ex-message e)
@@ -514,6 +543,7 @@
                "  [v]\n"
                "  (loop [i 0 acc []]\n"
                "    (if (< i (ucl/length v)) (recur (inc i) (conj acc (ucl/elt v i))) acc)))\n\n"
+               "(defn equalp\n   \"Common Lisp's equalp on what the cases hold: vectors element by element.\"\n   [a b]\n   (cond (number? a) (and (number? b) (== a b))\n         (or (nil? a) (keyword? a) (true? a) (false? a)) (= a b)\n         :else (= (contents a) (contents b))))\n\n"
                (str/join "\n\n" (for [[f rs] per-file, d (deftests f rs)] (render d)))
                "\n"))
     (let [total (reduce + (map (comp count second) per-file))

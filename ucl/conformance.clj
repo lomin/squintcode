@@ -20,7 +20,7 @@
    'cond "cond", 'and "and", 'or "or", 'do "progn", 'return "return", 'list "list",
    ;; the sequence functions' cases (README §4.2): on numbers, keywords and nil,
    ;; Clojure's = is eql
-   'identity "identity", 'vector "vector", 'not= "/=", '= "eql",
+   'identity "identity", 'vector "vector", 'equalp "equalp", 'not= "/=", '= "eql",
    ;; ucl/ansi's generated tests read a host vector's elements with `contents`;
    ;; Common Lisp prints the vector itself the same way
    'contents "identity"})
