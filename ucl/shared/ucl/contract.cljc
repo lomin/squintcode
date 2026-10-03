@@ -1323,7 +1323,8 @@
 ;; a top-level def that is not one would ride into every submission (H31).
 (defn ^:macro-support vocabulary-names []
   '[loop count count-if count-if-not find find-if find-if-not
-    position position-if position-if-not reduce every some notany notevery])
+    position position-if position-if-not reduce every some notany notevery
+    fill replace copy-seq subseq reverse nreverse sort stable-sort])
 
 (defn ^:macro-support expand-vocabulary
   "A vocabulary macro's expansion: its name's registry entry, called on the

@@ -70,7 +70,9 @@
 ;; ===========================================================================
 ;; The functions: required arguments, keywords, curried forms (D48, D50)
 ;; ===========================================================================
-;; Every function here takes its sequence second. `:rest` -- the `every`
+;; `:seq-pos` -- where the sequence is among the required arguments (second
+;; unless given); with two sequences, the one written (D50). `:nopt` --
+;; optional positional arguments (`subseq`'s end). `:rest` -- the `every`
 ;; family takes one or more sequences and has no curried form (D50).
 
 (defn ^:macro-support specs []
@@ -87,24 +89,50 @@
    "every"            {:nreq 2 :rest true}
    "some"             {:nreq 2 :rest true}
    "notany"           {:nreq 2 :rest true}
-   "notevery"         {:nreq 2 :rest true}})
+   "notevery"         {:nreq 2 :rest true}
+   "fill"             {:nreq 2 :seq-pos 0 :keys #{:start :end}}
+   "replace"          {:nreq 2 :seq-pos 0 :keys #{:start1 :end1 :start2 :end2}}
+   "copy-seq"         {:nreq 1 :seq-pos 0 :keys #{}}
+   "subseq"           {:nreq 2 :nopt 1 :seq-pos 0}
+   "reverse"          {:nreq 1 :seq-pos 0 :keys #{}}
+   "nreverse"         {:nreq 1 :seq-pos 0 :keys #{}}
+   "sort"             {:nreq 2 :seq-pos 0 :keys #{:key}}
+   "stable-sort"      {:nreq 2 :seq-pos 0 :keys #{:key}}})
 
 (defn ^:macro-support call-shape
   "`:full`, `:curried` (every argument but the sequence), or nil."
   [spec args]
-  (let [n (:nreq spec)]
-    (cond (:rest spec)                         (when (>= (count args) n) :full)
-          (and (>= (count args) n)
-               (keyword-tail? (drop n args)))  :full
-          (and (= n 2) (>= (count args) 1)
-               (keyword-tail? (drop 1 args)))  :curried
+  (let [n (:nreq spec)
+        o (or (:nopt spec) 0)
+        c (count args)]
+    (cond (:rest spec)                               (when (>= c n) :full)
+          ;; optional positionals and no keywords: only one argument short
+          ;; is curried, so (subseq v 2) is a call and (subseq 2) a function
+          (pos? o)                                   (cond (<= n c (+ n o)) :full
+                                                           (= c (dec n))   :curried
+                                                           :else nil)
+          (and (>= c n) (keyword-tail? (drop n args))) :full
+          (and (>= c (dec n))
+               (keyword-tail? (drop (dec n) args)))  :curried
           :else nil)))
+
+(defn ^:macro-support splice-sequence
+  "The call `form`, short of its sequence, with `s` put where the sequence goes."
+  [spec form s]
+  (let [[h & args] form
+        p (if (contains? spec :seq-pos) (:seq-pos spec) 1)]
+    (list* h (concat (take p args) [s] (drop p args)))))
 
 (defn ^:macro-support usage [fname]
   (case fname
     ("count" "find" "position") (str "(" fname " item sequence &key from-end start end key test test-not)")
     "reduce"                    "(reduce function sequence &key key from-end start end initial-value)"
     ("every" "some" "notany" "notevery") (str "(" fname " predicate sequence &rest sequences)")
+    "fill"                      "(fill sequence item &key start end)"
+    "replace"                   "(replace sequence-1 sequence-2 &key start1 end1 start2 end2)"
+    ("copy-seq" "reverse" "nreverse") (str "(" fname " sequence)")
+    "subseq"                    "(subseq sequence start &optional end)"
+    ("sort" "stable-sort")      (str "(" fname " sequence predicate &key key)")
     (str "(" fname " predicate sequence &key from-end start end key)")))
 
 (defn ^:macro-support parse-keys
@@ -206,7 +234,8 @@
   (case (:kind spec)
     :identity (k (first args))
     :call     (k (cons (:f spec) args))
-    :curried  (let [[h a0 & kws] (:form spec)] (k (list* h a0 (first args) kws)))
+    :curried  (let [f (:form spec)]
+                (k (splice-sequence (get (specs) (name (first f))) f (first args))))
     :inline   (let [[params body] (or (fn-arity (:form spec) (count args))
                                       (contract/fail!
                                        (str "the fn " (pr-str (:form spec)) " takes no "
@@ -267,14 +296,28 @@
           (list 'if test (body i nxt) exit))))
 
 (defn ^:macro-support bounds
-  "[st s e]: the `:start` and `:end` of sequence `v`. An `:end` that is not a
-   literal may be nil at run time, meaning the length (CLHS 17.1.1)."
-  [st v keys]
-  (let [s (get keys :start 0)
-        e (get keys :end)]
+  "[st s e]: the `:start` and `:end` (or `sk`/`ek`) of sequence `v`. An end
+   that is not a literal may be nil at run time, meaning the length (CLHS
+   17.1.1)."
+  ([st v keys] (bounds st v keys :start :end))
+  ([st v keys sk ek]
+  (let [s (get keys sk 0)
+        e (get keys ek)]
     [st s (cond (nil? e)    (list (api 'length) v)
                 (number? e) e
-                :else       (list 'if (list 'nil? e) (list (api 'length) v) e))]))
+                :else       (list 'if (list 'nil? e) (list (api 'length) v) e))])))
+
+(defn ^:macro-support check-bounds
+  "At safety >= 1, a binding that signals unless 0 <= s <= e <= length
+   (CLHS 17.1.1); nothing at safety 0."
+  [backend st v s e]
+  (if (pos? (contract/safety backend))
+    (conj st (gensym "_")
+          (list 'if (list 'and (list '<= 0 s) (list '<= s e) (list '<= e (list (api 'length) v)))
+                nil
+                ((contract/op backend :seqfn :fail)
+                 "bounding indices must satisfy 0 <= start <= end <= length (CLHS 17.1.1)")))
+    st))
 
 (defn ^:macro-support finish [st body] (contract/wrap-let st body))
 
@@ -300,6 +343,7 @@
         [st s e]    (bounds st v kforms)
         [st s]      (bind st s "s")
         [st e]      (bind st e "e")
+        st          (check-bounds backend st v s e)
         negate?     (and if? (.endsWith ^String fname "-not"))
         test        (if if?
                       (fn [kv k] (apply-fn pred [kv] (if negate? (fn [t] (k (list 'not t))) k)))
@@ -443,6 +487,7 @@
         [st s e]  (bounds st v kf)
         [st s]    (bind st s "s")
         [st e]    (bind st e "e")
+        st        (check-bounds backend st v s e)
         init?     (contains? kf :initial-value)
         acc       (gensym "acc")
         step      (fn [fe]
@@ -467,6 +512,183 @@
     (finish st (both-directions (:from-end kf) build))))
 
 ;; ===========================================================================
+;; fill, replace, copy-seq, subseq, reverse, nreverse (I40, I47)
+;; ===========================================================================
+;; At safety >= 1 each stores through ucl's checked `setf` of `elt`, which
+;; signals a store outside a vector's element type. At safety 0 a host's
+;; native bulk operation replaces the loop where I40 measured it faster: the
+;; backend's `:seqfn` operations return a form, or nil for the loop.
+
+(defn ^:macro-support store [v i x] (list (api 'setf) (list (api 'elt) v i) x))
+
+(defn ^:macro-support counted-statement
+  "A loop of a fresh counter over [s, e), upward or downward, running
+   `(body i)` for its effect."
+  [backend s e from-end body]
+  (index-loop backend s e from-end [] (fn [i nxt] (list 'do (body i) (nxt))) nil))
+
+(defn ^:macro-support native [backend op & args]
+  (when (zero? (contract/safety backend))
+    (apply (contract/op backend :seqfn op) args)))
+
+(defn ^:macro-support expand-fill [backend form]
+  (let [[_ sq item & kvs] form
+        st       (binder)
+        [st v]   (bind st sq "v")
+        [st x]   (bind st item "item")
+        {:keys [order]} (parse-keys "fill" (get (specs) "fill") kvs form)
+        [st kf]  (bind-keys st order #{})
+        [st s e] (bounds st v kf)
+        [st s]   (bind st s "s")
+        [st e]   (bind st e "e")
+        st       (check-bounds backend st v s e)]
+    (finish st (list 'do
+                     (or (native backend :fill v x s e)
+                         (counted-statement backend s e false (fn [i] (store v i x))))
+                     v))))
+
+(defn ^:macro-support expand-replace [backend form]
+  (let [[_ sq1 sq2 & kvs] form
+        st         (binder)
+        [st v1]    (bind st sq1 "v")
+        [st v2]    (bind st sq2 "v")
+        {:keys [order]} (parse-keys "replace" (get (specs) "replace") kvs form)
+        [st kf]    (bind-keys st order #{})
+        [st s1 e1] (bounds st v1 kf :start1 :end1)
+        [st s2 e2] (bounds st v2 kf :start2 :end2)
+        [st s1]    (bind st s1 "s")
+        [st e1]    (bind st e1 "e")
+        [st s2]    (bind st s2 "s")
+        [st e2]    (bind st e2 "e")
+        st         (check-bounds backend st v1 s1 e1)
+        st         (check-bounds backend st v2 s2 e2)
+        [st n]     (bind st (list (api 'min) (list '- e1 s1) (list '- e2 s2)) "n")
+        copy       (fn [from-end]
+                     (counted-statement backend 0 n from-end
+                                        (fn [i] (store v1 (list '+ s1 i) (list (api 'elt) v2 (list '+ s2 i))))))]
+    (finish st (list 'do
+                     (or (native backend :replace v1 v2 s1 s2 n)
+                         ;; the same vector, copied up: from the end, as if
+                         ;; through a copy (CLHS replace)
+                         (list 'if (list 'and (list 'identical? v1 v2) (list '> s1 s2))
+                               (copy true)
+                               (copy false)))
+                     v1))))
+
+(defn ^:macro-support subseq-form
+  "A fresh vector of `v`'s elements in [s, e), of `v`'s kind: the host's
+   slice (I40)."
+  [backend v s e]
+  ((contract/op backend :seqfn :subseq) v s e))
+
+(defn ^:macro-support expand-subseq [backend form]
+  (let [[_ sq start end] form
+        st       (binder)
+        [st v]   (bind st sq "v")
+        [st s0]  (bind st start "start")
+        [st e0]  (if (nil? end) [st nil] (bind st end "end"))
+        [st s e] (bounds st v (cond-> {:start s0} (some? e0) (assoc :end e0)))
+        ;; one call, used once at safety 0: a `let` here would be an IIFE in
+        ;; expression position on Squint (H22); the check uses e twice
+        [st e]   (if (pos? (contract/safety backend)) (bind st e "e") [st e])
+        st       (check-bounds backend st v s e)]
+    (finish st (subseq-form backend v s e))))
+
+(defn ^:macro-support expand-copy-seq [backend form]
+  (let [st     (binder)
+        [st v] (bind st (second form) "v")]
+    (finish st (subseq-form backend v 0 (list (api 'length) v)))))
+
+(defn ^:macro-support reverse-in-place
+  "Swap the halves of `v`, of length `n`; then `v`."
+  [backend v n]
+  (let [a (gensym "a") j (gensym "j")]
+    (list 'do
+          (counted-statement backend 0 (list 'bit-shift-right n 1) false
+                             (fn [i] (list 'let [j (list '- n 1 i) a (list (api 'elt) v i)]
+                                           (store v i (list (api 'elt) v j))
+                                           (store v j a))))
+          v)))
+
+(defn ^:macro-support expand-nreverse [backend form]
+  (let [st     (binder)
+        [st v] (bind st (second form) "v")
+        [st n] (bind st (list (api 'length) v) "n")]
+    (finish st (reverse-in-place backend v n))))
+
+(defn ^:macro-support expand-reverse [backend form]
+  (let [st     (binder)
+        [st v] (bind st (second form) "v")
+        [st n] (bind st (list (api 'length) v) "n")
+        r      (gensym "r")]
+    (finish (conj st r (subseq-form backend v 0 n)) (reverse-in-place backend r n))))
+
+;; ===========================================================================
+;; sort, stable-sort (I40, I47)
+;; ===========================================================================
+;; One bottom-up merge sort for both: stable, so it is a correct `sort` too,
+;; and on Dart the fastest choice (§9.13). Its scratch vector is a copy of
+;; the sequence, so it has the sequence's kind without a type at expansion
+;; (I23). V8's typed sort replaces it for `<` without :key (I40), guarded at
+;; run time: a fixnum-vector may be a plain Array, which sorts as strings (H70).
+
+(defn ^:macro-support less-than?
+  "Is the predicate `f` Common Lisp's or Clojure's `<`?"
+  [f]
+  (let [f (or (designator f) f)]
+    (and (symbol? f) (= "<" (name f))
+         (contains? #{nil "clojure.core" "cljs.core" "cljd.core"} (namespace f)))))
+
+(defn ^:macro-support merge-sort
+  "Sort `v` (length `n`) in place, through the scratch vector `tmp`; `less`
+   is (fn [a b k]) passing the form of `(pred a b)` to `k`."
+  [backend v n tmp less]
+  (let [w (counter backend "w") lo (counter backend "lo") c (counter backend "c")
+        i (counter backend "i") j (counter backend "j") k (counter backend "k")
+        mid (gensym "mid") hi (gensym "hi") a (gensym "a") b (gensym "b")
+        el  (fn [x] (list (api 'elt) v x))
+        take-j (list 'do (store tmp k (el j)) (list 'recur i (list 'inc j) (list 'inc k)))
+        take-i (list 'do (store tmp k (el i)) (list 'recur (list 'inc i) j (list 'inc k)))]
+    (list 'loop [w 1]
+          (list 'when (list '< w n)
+                (list 'loop [lo 0]
+                      (list 'when (list '< lo n)
+                            (list 'let [mid (list (api 'min) (list '+ lo w) n)
+                                        hi  (list (api 'min) (list '+ lo (list '* 2 w)) n)]
+                                  (list 'loop [i lo j mid k lo]
+                                        (list 'when (list '< k hi)
+                                              (list 'if (list '>= i mid) take-j
+                                                    (list 'if (list '>= j hi) take-i
+                                                          ;; stable: the left element unless the right is less
+                                                          (list 'let [a (el j) b (el i)]
+                                                                (less a b (fn [t] (list 'if t take-j take-i))))))))
+                                  (list 'recur (list '+ lo (list '* 2 w))))))
+                (list 'loop [c 0]
+                      (list 'when (list '< c n)
+                            (store v c (list (api 'elt) tmp c))
+                            (list 'recur (list 'inc c))))
+                (list 'recur (list '* 2 w))))))
+
+(defn ^:macro-support expand-sort [backend form]
+  (let [fname     (name (first form))
+        [_ sq pred & kvs] form
+        st        (binder)
+        [st v]    (bind st sq "v")
+        [st ps]   (fn-spec st pred)
+        {:keys [order]} (parse-keys fname (get (specs) fname) kvs form)
+        [st kf]   (bind-keys st order #{:key})
+        [st n]    (bind st (list (api 'length) v) "n")
+        tmp       (gensym "tmp")
+        key       (:key kf)
+        less      (fn [a b k] (apply-key key a (fn [ka] (apply-key key b (fn [kb] (apply-fn ps [ka kb] k))))))
+        sorted    (list 'let [tmp (subseq-form backend v 0 n)]
+                        (merge-sort backend v n tmp less)
+                        v)]
+    (finish st (if (and (less-than? pred) (nil? key))
+                 ((contract/op backend :seqfn :sort-native) v sorted)
+                 sorted))))
+
+;; ===========================================================================
 ;; The registry (I23)
 ;; ===========================================================================
 
@@ -478,14 +700,20 @@
         spec  (get (specs) fname)
         shape (call-shape spec (rest form))]
     (case shape
-      :curried (let [s (gensym "sequence")
-                     [h a0 & kws] form]
-                 (list 'fn [s] (list* h a0 s kws)))
+      :curried (let [s (gensym "sequence")]
+                 (list 'fn [s] (splice-sequence spec form s)))
       :full    (case fname
                  ("count" "count-if" "count-if-not")          (expand-count backend form)
                  ("find" "find-if" "find-if-not")             (expand-find backend form)
                  ("position" "position-if" "position-if-not") (expand-position backend form)
                  "reduce"                                     (expand-reduce backend form)
+                 "fill"                                       (expand-fill backend form)
+                 "replace"                                    (expand-replace backend form)
+                 "subseq"                                     (expand-subseq backend form)
+                 "copy-seq"                                   (expand-copy-seq backend form)
+                 "reverse"                                    (expand-reverse backend form)
+                 "nreverse"                                   (expand-nreverse backend form)
+                 ("sort" "stable-sort")                       (expand-sort backend form)
                  (expand-quantifier backend form))
       (contract/fail! (str "malformed " fname ": " (pr-str form) ". Write " (usage fname)
                            (when-not (:rest spec)

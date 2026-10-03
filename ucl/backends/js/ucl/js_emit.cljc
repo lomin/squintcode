@@ -147,7 +147,18 @@
                                (list 'js/Math.max a b)))}
      :string {:princ (fn [x] (list 'js/String x))}
      :seqfn {:eql (fn [a b] ((:eql flavor) a b))
-             :fail (fn [msg] (list (api 'fail) msg))}
+             :fail (fn [msg] (list (api 'fail) msg))
+             ;; I40: native where V8 measured it faster; both containers
+             :fill (fn [v x s e] (list '.fill v x s e))
+             :replace (fn [a b s1 s2 n] (list (api 'replace-into) a b s1 s2 n))
+             :subseq (fn [v s e] (if (:vector-reads? flavor)
+                                   (list (api 'subseq-of) v s e)
+                                   (list '.slice v s e)))
+             ;; numeric only on a typed array: a plain Array sorts as strings (H70)
+             :sort-native (fn [v fallback]
+                            (list 'if (vary-meta (list 'js/ArrayBuffer.isView v) assoc :tag 'boolean)
+                                  (list 'do (list '.sort v) v)
+                                  fallback))}
      :types {:hint (fn [t _]
                      (when (:tags? flavor)
                        (cond (#{:fixnum :sb53} t) 'number
@@ -289,6 +300,24 @@
        (when-not (js/Array.isArray ~'v)
          (~'fail "vector-push-extend needs an adjustable vector with a fill pointer"))
        (dec (.push ~'v ~'x)))
+
+     (defn ~'replace-into
+       "replace at safety 0 (I40): one copy when both vectors are typed, else a
+        loop -- downward when one vector's ranges overlap upward (CLHS replace)."
+       [~'a ~'b ~'s1 ~'s2 ~'n]
+       (if (and (js/ArrayBuffer.isView ~'a) (js/ArrayBuffer.isView ~'b))
+         (.set ~'a (.subarray ~'b ~'s2 (+ ~'s2 ~'n)) ~'s1)
+         (if (and (identical? ~'a ~'b) (> ~'s1 ~'s2))
+           (loop [~'i (dec ~'n)]
+             (when (>= ~'i 0) (aset ~'a (+ ~'s1 ~'i) (aget ~'b (+ ~'s2 ~'i))) (recur (dec ~'i))))
+           (loop [~'i 0]
+             (when (< ~'i ~'n) (aset ~'a (+ ~'s1 ~'i) (aget ~'b (+ ~'s2 ~'i))) (recur (inc ~'i))))))
+       ~'a)
+
+     ~@(when vector-reads?
+         ;; ClojureScript: a vector literal is a persistent vector
+         [`(defn ~'subseq-of [~'v ~'s ~'e]
+             (if (vector? ~'v) (subvec ~'v ~'s ~'e) (.slice ~'v ~'s ~'e)))])
 
      (defn ~'check-contents [~'n ~'contents]
        (let [~'c (~'length-any ~'contents)]

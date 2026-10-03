@@ -91,6 +91,24 @@
     (fail "vector-push-extend needs an adjustable vector with a fill pointer"))
   (push x v))
 
+(defn subseq-of
+  "subseq and copy-seq (I40): a typed list's sublist is a typed copy."
+  [^List v ^int s ^int e]
+  (.sublist v s e))
+
+(defn replace-into
+  "replace at safety 0 (I40): setRange copies memory between typed lists --
+   correctly when they are one list -- and is slower than a loop otherwise."
+  [^List a ^List b ^int s1 ^int s2 ^int n]
+  (if (and (dart/is? a td/TypedData) (dart/is? b td/TypedData))
+    (.setRange a s1 (+ s1 n) b s2)
+    (if (and (identical? a b) (> s1 s2))
+      (loop [i (dec n)]
+        (when (>= i 0) (. a "[]=" (+ s1 i) (. b "[]" (+ s2 i))) (recur (dec i))))
+      (loop [i 0]
+        (when (< i n) (. a "[]=" (+ s1 i) (. b "[]" (+ s2 i))) (recur (inc i))))))
+  a)
+
 (defn check-contents [^int n ^List contents]
   (let [c (.-length contents)]
     (when-not (== c n)

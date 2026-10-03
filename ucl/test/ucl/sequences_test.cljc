@@ -146,6 +146,71 @@
       (is (== 10 (ucl/reduce + v)))
       (is (true? (ucl/every pos? v))))))
 
+(defn contents
+  "Every element, as a vector -- the portable way to compare a host array."
+  [v]
+  (loop [i 0 acc []]
+    (if (< i (ucl/length v))
+      (recur (inc i) (conj acc (ucl/elt v i)))
+      acc)))
+
+(defn general [v] (ucl/make-array (count v) :initial-contents v))
+
+(deftest fill-and-replace-test
+  (testing "fill: the sequence, filled in [start, end)"
+    (is (= [1 0 0 4] (contents (ucl/fill (arr [1 2 3 4]) 0 :start 1 :end 3))))
+    (is (= [7 7] (contents (ucl/fill (general [1 2]) 7))))
+    (is (= [0 0 0] (contents ((ucl/fill 0) (arr [1 2 3]))))))
+  (testing "replace: as many elements as both ranges hold"
+    (is (= [1 9 8 4 5] (contents (ucl/replace (arr [1 2 3 4 5]) (arr [9 8]) :start1 1))))
+    (is (= [8 2] (contents (ucl/replace (arr [1 2]) (arr [9 8 7]) :start2 1 :end1 1))))
+    (is (= [9 8 3] (contents ((ucl/replace (general [9 8])) (general [1 2 3]))))))
+  (testing "one vector, overlapping ranges: as if through a copy (CLHS replace)"
+    (let [v (arr [1 2 3 4 5])] (is (= [1 1 2 3 5] (contents (ucl/replace v v :start1 1 :end2 3)))))
+    (let [v (arr [1 2 3 4 5])] (is (= [2 3 4 5 5] (contents (ucl/replace v v :start2 1))))))
+  (testing "a store outside the element type signals at safety 1"
+    (is (signals-error? (ucl/fill (arr [1 2]) 3000000000)))))
+
+(deftest subseq-and-reverse-test
+  (testing "subseq and copy-seq: fresh vectors"
+    (is (= [2 3] (contents (ucl/subseq (arr [1 2 3 4]) 1 3))))
+    (is (= [3 4] (contents (ucl/subseq (arr [1 2 3 4]) 2))))
+    (is (= [3 4] (contents (ucl/subseq (arr [1 2 3 4]) 2 nil))))
+    (is (= [8 9] (contents ((ucl/subseq 1) (arr [7 8 9])))))
+    (let [v (arr [1 2]) c (ucl/copy-seq v)]
+      (ucl/setf (ucl/elt c 0) 5)
+      (is (= [1 2] (contents v)))
+      (is (= [5 2] (contents c))))
+    (is (= [2 3] (contents (ucl/subseq (fill-pointered [1 2 3]) 1)))))
+  (testing "reverse is fresh, nreverse reverses in place"
+    (let [v (arr [1 2 3])]
+      (is (= [3 2 1] (contents (ucl/reverse v))))
+      (is (= [1 2 3] (contents v))))
+    (is (= [4 3 2 1] (contents (ucl/nreverse (arr [1 2 3 4])))))
+    (is (= [] (contents (ucl/nreverse (arr [])))))
+    (is (= [2 1] (contents ((ucl/reverse) (general [1 2]))))))
+  (testing "bounding indices signal at safety 1 (CLHS 17.1.1)"
+    (is (signals-error? (ucl/subseq (arr [1 2]) 1 5)))
+    (is (signals-error? (ucl/subseq (arr [1 2]) 2 1)))
+    (is (signals-error? (ucl/count-if odd? (arr [1 2]) :start 2 :end 1)))
+    (is (signals-error? (ucl/fill (arr [1 2]) 0 :end 3)))))
+
+(deftest sort-test
+  (testing "sort and stable-sort, with an inlined predicate"
+    (is (= [1 3 3 5 9] (contents (ucl/sort (arr [5 3 9 1 3]) <))))
+    (is (= [9 5 3 3 1] (contents (ucl/sort (arr [5 3 9 1 3]) >))))
+    (is (= [9 5 1] (contents (ucl/sort (arr [5 1 9]) (fn [a b] (> a b))))))
+    (is (= [] (contents (ucl/sort (arr []) <))))
+    (is (= [1 2 3] (contents ((ucl/sort <) (arr [3 1 2]))))))
+  (testing "a plain vector of numbers sorts numerically (H70)"
+    (is (= [1 9 10] (contents (ucl/sort (general [10 9 1]) <)))))
+  (testing "stable-sort keeps equal keys in order; :key"
+    (let [v (ucl/make-array 4 :initial-contents [21 10 22 11])]
+      (is (= [10 11 21 22] (contents (ucl/stable-sort v < :key (fn [x] (quot x 10)))))))
+    (is (= [3 2 1] (contents (ucl/sort (arr [1 2 3]) < :key -)))))
+  (testing "a vector with a fill pointer sorts up to its fill pointer"
+    (is (= [1 2 3] (contents (ucl/sort (fill-pointered [3 1 2]) <))))))
+
 (deftest curried-form-test
   (testing "a sequence function short of its sequence is a function of it (D48)"
     (is (== 2 ((ucl/count-if odd?) (arr [1 3 4]))))
@@ -179,4 +244,7 @@
   (is (== 2 (k/first-odd-index (arr [2 4 5 7]))))
   (is (== -1 (k/first-odd-index (arr [2 4]))))
   (is (true? (k/all-in-range? (arr [1 2 3]) 0 3)))
-  (is (== 4 (k/window-odd-counts (arr [1 2 3 5]) 2))))
+  (is (== 4 (k/window-odd-counts (arr [1 2 3 5]) 2)))
+  (is (= [1 2 3] (contents (k/sorted-copy (arr [3 1 2])))))
+  (is (= [3 2 1] (contents (k/descending (arr [1 3 2])))))
+  (is (= [0 0 1 2] (contents (k/shifted (arr [1 2 3 4]) 2)))))

@@ -247,7 +247,13 @@
      ;; Dart's == is eql on what a sequence holds: ints and strings by value
      ;; (D52), objects by identity unless their class says otherwise
      :seqfn {:eql (fn [a b] (list '. a "==" b))
-             :fail (fn [msg] (list (rt 'fail) msg))}
+             :fail (fn [msg] (list (rt 'fail) msg))
+             ;; I40: Dart's fillRange is slower than the loop; sublist and a
+             ;; typed setRange copy memory
+             :fill (fn [& _] nil)
+             :replace (fn [a b s1 s2 n] (list (rt 'replace-into) a b s1 s2 n))
+             :subseq (fn [v s e] (list (rt 'subseq-of) v s e))
+             :sort-native (fn [_ fallback] fallback)}
      :types {:hint (fn [t _] (type-hint env t))
              :local-hint (fn [t] (when (contains? #{:fixnum :sb53} t) 'int))}
      :struct {:define (fn [model] (define-struct env model))}

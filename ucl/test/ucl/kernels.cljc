@@ -122,3 +122,19 @@
       (ucl/let ((c (ucl/count-if (fn [x] (odd? x)) nums :start s :end (+ s w))))
         (declare (type fixnum c))
         (ucl/incf total c)))))
+
+(ucl/defun sorted-copy (nums)
+  "sort with < on a copy: V8's typed sort when the copy is typed (I40)."
+  (declare (type fixnum-vector nums))
+  (ucl/sort (ucl/copy-seq nums) <))
+
+(ucl/defun descending (nums)
+  "sort with an inlined predicate: the shared merge sort."
+  (declare (type fixnum-vector nums))
+  (ucl/sort nums (fn [a b] (> a b))))
+
+(ucl/defun shifted (nums k)
+  "replace within one vector, and fill."
+  (declare (type fixnum-vector nums) (type fixnum k))
+  (ucl/replace nums nums :start1 k)
+  (ucl/fill nums 0 :end k))

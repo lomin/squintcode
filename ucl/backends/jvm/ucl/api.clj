@@ -9,7 +9,7 @@
    This namespace defines ucl/let and ucl/dotimes, so it excludes Clojure's
    and spells them clojure.core/let and clojure.core/dotimes."
   (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
-                            count find some reduce])
+                            count find some reduce reverse sort replace subseq])
   (:require [ucl.contract :as contract]
             [ucl.loop :as ucl-loop]
             [ucl.seq :as seq])
@@ -90,6 +90,17 @@
   (if (number? x)
     x
     (throw (ex-info (str "ucl: the value " (pr-str x) " is not a number") {:type-error x}))))
+
+(defn subseq-of
+  "subseq and copy-seq: a fresh vector of the receiver's kind; a vector with a
+   fill pointer gives a simple one, as in SBCL."
+  [v s e]
+  (clojure.core/let [s (int s) e (int e)]
+    (cond (instance? (Class/forName "[I") v) (java.util.Arrays/copyOfRange ^ints v s e)
+          (instance? (Class/forName "[J") v) (java.util.Arrays/copyOfRange ^longs v s e)
+          (instance? (Class/forName "[Ljava.lang.Object;") v) (java.util.Arrays/copyOfRange ^objects v s e)
+          (vector? v) (subvec v s e)
+          :else (.toArray (.subList ^List v s e)))))
 
 (defn check-contents
   "Safety >= 1: :initial-contents must match the dimension, as in CL."
@@ -358,7 +369,12 @@
      ;; Clojure's = is eql on what a sequence holds: numbers by value and
      ;; type category, strings by value (D52), everything else by identity
      :seqfn {:eql (fn [a b] (list 'clojure.lang.Util/equiv a b))
-             :fail (fn [msg] (list 'throw (list 'clojure.core/ex-info (str "ucl: " msg) {})))}
+             :fail (fn [msg] (list 'throw (list 'clojure.core/ex-info (str "ucl: " msg) {})))
+             ;; a test host: loops, and a copy that dispatches on the receiver
+             :fill (fn [& _] nil)
+             :replace (fn [& _] nil)
+             :subseq (fn [v s e] (list `subseq-of v s e))
+             :sort-native (fn [_ fallback] fallback)}
      ;; a local bound to a literal: Clojure already infers a primitive long,
      ;; and refuses a hint there ("Can't type hint a local with a primitive initializer")
      :types {:hint (fn [t n] (type-tag t n))
