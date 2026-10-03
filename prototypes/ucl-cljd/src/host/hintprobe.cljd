@@ -1,0 +1,12 @@
+(ns host.hintprobe
+  "Evidence for H25: ClojureDart keeps a top-level fn's parameters `dynamic`
+   even with a hand-written ^int hint, and casts at the point of use. So a
+   `ucl/defun` with `(declare (type fixnum n))` compiles to exactly what the
+   hand-written version does -- compare the two in lib/cljd-out/host/hintprobe.dart."
+  (:require [ucl.api :as ucl]))
+
+(defn by-hand [^int n] (+ n 1))
+
+(ucl/defun by-defun (n)
+  (declare (type fixnum n))
+  (+ n 1))

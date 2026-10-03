@@ -1,0 +1,26 @@
+(ns ucl.api
+  "SPIKE -- ClojureDart backend."
+  (:require [ucl.contract :as contract]
+            ["dart:typed_data" :as td]))
+
+;; Runtime half. A client namespace has not imported dart:typed_data, so an
+;; expansion cannot name td/Int32List there; it calls these instead.
+(defn make-fixnum-vector ^td/Int32List [^int n ^int init]
+  (doto (td/Int32List n) (.fillRange 0 n init)))
+(defn make-sb53-vector ^td/Float64List [^int n ^double init]
+  (doto (td/Float64List n) (.fillRange 0 n init)))
+
+(def ^:macro-support emit
+  {:indexed {:read  (fn [[a i] _] (list '. (vary-meta a assoc :tag 'List) "[]" i))
+             :write (fn [[a i] _ v] (list '. (vary-meta a assoc :tag 'List) "[]=" i v))}
+   :vector  {:make (fn [n element init]
+                     (case element
+                       :t      (list 'List/filled n init)
+                       :fixnum (list 'ucl.api/make-fixnum-vector n (or init 0))
+                       :sb53   (list 'ucl.api/make-sb53-vector n (double (or init 0)))))}
+   :types   {:hint {:fixnum 'int
+                    [:vector :fixnum] 'List
+                    [:vector :sb53]   'List
+                    [:vector :t]      'List}}})
+
+(contract/defapi emit)

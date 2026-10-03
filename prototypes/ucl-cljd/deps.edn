@@ -1,0 +1,6 @@
+{:paths ["shared" "backends/cljd" "example" "src"]
+ :deps {tensegritics/clojuredart
+        {:git/url "https://github.com/tensegritics/ClojureDart.git"
+         :sha "247b3c2c5f2af8378e49a8f1271fb4e45e4a6982"}}
+ :aliases {:cljd {:main-opts ["-m" "cljd.build"]}}
+ :cljd/opts {:kind :dart :main host.main}}

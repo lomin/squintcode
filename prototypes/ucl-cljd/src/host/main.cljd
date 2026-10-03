@@ -1,0 +1,6 @@
+(ns host.main
+  "ClojureDart entry point: Dart needs a `main`."
+  (:require [ucl-example.fizzbuzz :as fizzbuzz]
+            [host.hintprobe]))
+
+(defn main [] (fizzbuzz/-main))
