@@ -79,7 +79,7 @@
 ;; A Common Lisp type specifier is reduced to one canonical form that backends
 ;; map to host types:
 ;;   :fixnum  :sb53            integer types
-;;   [:vector E]               simple vector, E one of :t :fixnum :sb53
+;;   [:vector E]               simple vector, E one of :t :fixnum :sb53 :string
 ;;   [:struct Name]            a ucl/defstruct type
 ;;   nil                       a type the contract does not act on
 
@@ -100,8 +100,11 @@
     (= spec 't)                        :t
     (= spec 'fixnum)                   :fixnum
     (= spec '(signed-byte 53))         :sb53
+    ;; a host that reifies element types (Dart) needs it for a result LeetCode
+    ;; types List<String>; elsewhere it upgrades to t, as in Common Lisp
+    (= spec 'string)                   :string
     :else (fail! (str "unsupported element type " (pr-str spec)
-                      ". v1 supports t, fixnum and (signed-byte 53).")
+                      ". v1 supports t, fixnum, (signed-byte 53) and string.")
                  {:type spec})))
 
 (defn ^:macro-support canonical-type

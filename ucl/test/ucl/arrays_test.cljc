@@ -18,6 +18,10 @@
     (is (= [0 0 0] (contents (ucl/make-array 3 :element-type 'fixnum))))
     (is (= [4 4] (contents (ucl/make-array 2 :element-type 'fixnum :initial-element 4))))
     (is (= [0 0] (contents (ucl/make-array 2 :element-type '(signed-byte 53))))))
+  (testing "element type string"
+    (let [a (ucl/make-array 2 :element-type 'string :initial-element "")]
+      (ucl/setf (ucl/elt a 1) "Fizz")
+      (is (= ["" "Fizz"] (contents a)))))
   (testing ":initial-contents, literal and run-time, vector and list"
     (is (= [1 2 3] (contents (ucl/make-array 3 :initial-contents [1 2 3]))))
     (is (= [1 2 3] (contents (ucl/make-array 3 :initial-contents '(1 2 3)))))

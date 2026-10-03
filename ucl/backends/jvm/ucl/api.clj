@@ -170,7 +170,8 @@
    :sb53              'long
    [:vector :fixnum]  'ints
    [:vector :sb53]    'longs
-   [:vector :t]       'objects})
+   [:vector :t]       'objects
+   [:vector :string]  'objects})   ; string upgrades to t, as in Common Lisp
 
 (defn- type-tag
   "The JVM tag for a canonical type. Primitive tags only where Clojure allows
@@ -253,7 +254,8 @@
 
 (defn- make-vector [s n {:keys [element initial-element has-initial-element? adjustable?
                                fill-pointer items contents check-contents?]}]
-                (clojure.core/let [contents (if check-contents? `(check-contents ~n ~contents) contents)
+                (clojure.core/let [element (if (= :string element) :t element)
+                      contents (if check-contents? `(check-contents ~n ~contents) contents)
                       zero (if (= :t element) nil 0)
                       init (if has-initial-element? initial-element zero)]
                   (cond

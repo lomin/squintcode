@@ -52,7 +52,8 @@
 
 (defn- make-vector [flavor n {:keys [element initial-element has-initial-element? adjustable?
                                      fill-pointer items contents check-contents?]}]
-  (let [arr (:array-literal flavor)
+  (let [element (if (= :string element) :t element)   ; upgraded to t, as in Common Lisp
+        arr (:array-literal flavor)
         ctor ({:t 'js/Array :fixnum 'js/Int32Array :sb53 'js/Float64Array} element)
         contents (if check-contents? (list (api 'check-contents) n contents) contents)
         filled (fn [len init] (list '.fill (list 'new ctor len) init))]
