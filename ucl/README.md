@@ -1055,6 +1055,42 @@ plain `try`/`throw`.
 So an exception is cheap only on the host that submits nothing; D55 compiles
 exits statically or not at all.
 
+### 9.13 Native bulk operations (`bench/native/`)
+
+D45 lets a sequence function use a host's native bulk operation where it
+measures faster than the element loop. Each candidate against the loop ucl
+would expand to, on LeetCode's two hosts: a typed vector (`Int32Array` /
+`Int32List`) and a general one (`Array` / `List<int>`), n = 100 and 10⁵, a
+`:start`/`:end` range of half the vector for `replace` and `subseq`. V8: 7
+fresh Node 24.16.0 processes; Dart 3.13.5 arm64: 5 processes, JIT and AOT.
+Median µs per call; every pair returns the same result.
+
+| operation, n = 10⁵ | V8 loop → native | Dart JIT loop → native | Dart AOT loop → native |
+|---|---|---|---|
+| `fill`, typed | 63 → **8.2** | 41 → 49 | 57 → 165 |
+| `fill`, general | 61 → 64 | 45 → 66 | 61 → 61 |
+| `replace`, typed (`set`/`setRange`) | 41 → **4.5** | 33 → **4** | 41 → **4** |
+| `replace`, general (`setRange`) | 36 → — | 41 → 113 | 61 → 146 |
+| `subseq`, typed (`slice`/`sublist`) | 84 → **41** | 46 → **9** | 47 → **9** |
+| `subseq`, general | 131 → **72** | 235 → 215 | 254 → 209 |
+
+At n = 100 the same picture, except V8's `set` (49 against 19 ns: the
+`subarray` view) and Dart AOT's `fillRange` (172 against 58 ns).
+
+Sorting 10⁵ fixnums, ms (n = 100: the same order):
+
+| | V8 | Dart JIT | Dart AOT |
+|---|---|---|---|
+| native, no comparator (`Int32Array.sort()` / `Int32List.sort()`) | **4.5** | 24.3 | 34.3 |
+| native, comparator `(a, b) => a - b` | 11.4 | 14.1 | 23.6 |
+| inline quicksort, `<` inlined | 6.4 | 5.6 | 17.9 |
+| inline bottom-up merge sort, `<` inlined (stable) | 7.2 | **3.7** | **4.9** |
+
+A native sort that calls a comparator loses to the inline expansion on both
+hosts: a closure call per comparison (H56, H57). Only V8's typed sort without
+a comparator wins, and only for numbers in ascending order. Dart's own sort is
+the slowest choice even without a comparator (H71). → I40.
+
 ## 10. Host facts
 
 Everything here was established by compiling and running, not by reading docs.
@@ -1290,6 +1326,17 @@ Found while building `ucl/loop` (SBCL 2.2.9, ECL 21.2.1):
   value that failed its end test, a later clause not stepped
   (`for i from 1 to 3 for j = (* i 10)` ends with `i` 4, `j` 30).
 
+Found by the native bulk-operation measurement (§9.13; Node 24.16.0, Dart 3.13.5):
+
+- **H70** — `Array.prototype.sort()` without a comparator sorts by the
+  elements' strings: `[10, 9, 1]` becomes `[1, 10, 9]`. A typed array's
+  sorts numerically. A `fixnum-vector` may be either container (D42), so a
+  native call on one must hold for both.
+- **H71** — Dart: `Int32List.setRange` and `sublist` copy memory, 5–10× an
+  element loop; `fillRange`, and `setRange` on a `List<int>`, are slower than
+  the loop (3× AOT for `fillRange`); `List.sort`, with or without a
+  comparator, is 4–7× slower than an inline merge sort.
+
 ## 11. Decision log
 
 "Evidence" means a measurement or probe decided it; "user judgement" means it
@@ -1394,6 +1441,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I27 | `ucl/loop` expands to one Clojure `loop` whose parameters are the `for` names, the internal counters, the default accumulator and `maximize`/`minimize` first-flags; each iteration runs the main clauses in order, then each `for` clause's step and end test, as Common Lisp orders them -- the same tests run once on the first values before the loop. A conditional binds its test (`it`) and a then/else local, and guards each clause under it; a value is read once, a `with`/`into` name assigned with `ucl/setf`. The epilogue (`finally`, the value) is copied to every end test, where every name it reads is bound -- no variable carries a value out of the loop | the 930 kernel's JavaScript is the hand-written loop: one `while`, one ternary per guarded `sum`, no IIFE; SBCL and ECL print the same `finally` values (H64) |
 | I28 | An expansion writes ucl's forms through the alias the caller wrote `ucl/loop` with (`ucl/elt`, `ucl/let`, `ucl/block`), and they expand later where the environment is right (I23) | they resolve exactly as the caller's own code; no host needs a fully qualified macro name |
 | I29 | Conformance (D60) is `ucl/conformance.clj`: every `(is (= expected form))` in a `deftest` named `*-conformance-test` is translated to Common Lisp -- ucl's names through the alias, vectors, numbers, booleans and a table of Clojure functions; anything else fails the run -- evaluated per case on SBCL and ECL, and its printed value compared with `expected`. The four hosts run the same assertions as tests, so all six agree. `ucl/run-tests.sh` runs it as a fifth host, `cl` | the cases are written once, where they already are; any vocabulary (the sequence functions too) joins by naming a deftest |
+| I40 | D45 per operation (§9.13): JS `fill` is `.fill` (either container); JS `replace` and Dart `replace` copy natively when both vectors are typed (`set`/`setRange`, checked at run time), else loop; `subseq`/`copy-seq` are `.slice`/`.sublist`; `sort`/`stable-sort` expand to one shared bottom-up merge sort with the predicate inlined, except JS with `<` (or `#'<`) on a `fixnum-vector`/`sb53-vector` that is a typed array at run time, which calls the native sort; Dart `fill` and everything on the JVM expand to loops | the measurement: native wins only where it copies memory or sorts typed numbers without a comparator; a run-time `ArrayBuffer.isView` check because a declared `fixnum-vector` may be a plain `Array` (H70) |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
