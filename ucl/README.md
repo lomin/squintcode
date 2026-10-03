@@ -27,7 +27,8 @@ expansion. Designed, not built (§4.2, D44–D52, §9.11).
 **`ucl/loop` and blocks** (2026-10-03, a fifth grilling session): Common
 Lisp's `LOOP` over vectors, numbers and hash tables, and its block model --
 `block`, `return-from`, `return` -- with every exit compiled statically.
-Designed, not built (§4.3, D53–D62, §9.12, H59–H62).
+Blocks are built (I23–I26); `ucl/loop` is designed (§4.3, D53–D62, §9.12,
+H59–H62).
 
 ```bash
 ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint, ClojureDart
@@ -219,6 +220,7 @@ meaning.
 | `(ucl/setf place v)` `(ucl/incf place [d])` `(ucl/decf place [d])` | assign / read-modify-write any of the places above, or a variable | D6, D29 |
 | `(ucl/let ((var init) …) (declare …) body…)` `(ucl/let* …)` | bind variables, in parallel / in order | D29, D31, D32 |
 | `(ucl/dotimes (var count [result]) (declare …) body…)` | `var` from 0 below `count`, then `result` | D33 |
+| `(ucl/block name body…)` `(ucl/return-from name [v])` `(ucl/return [v])` | leave a block with a value; `ucl/dotimes` is a block `nil`, `ucl/defun`/`ucl/defmethod` a block named after themselves | D55, D56 |
 | `(ucl/min a b …)` `(ucl/max a b …)` | inline in call position; functions as values (`(reduce ucl/max …)`) | D21 |
 | `ucl/most-positive-fixnum` `ucl/most-negative-fixnum` | ±2³¹ bounds (D10) | D23 |
 | `ucl/double-float-positive-infinity` `…-negative-…` | the SBCL/ECL extension names | D23 |
@@ -366,7 +368,7 @@ exercised. In parallel, the native bulk operations D45 needs are measured
 `test/ucl/kernels.cljc` under I12 and I19, and one ported solution measured
 against its `loop`/`recur` version.
 
-### 4.3 `ucl/loop` and blocks (D53–D62) -- designed, not built
+### 4.3 `ucl/loop` and blocks (D53–D62) -- blocks built, `ucl/loop` designed
 
 `ucl/loop` is Common Lisp's `LOOP` (CLHS 6.1) for what ucl has: vectors,
 numbers, hash tables. It exists to make a solution short without making it
@@ -428,11 +430,14 @@ slower: its clauses expand to the `while` loop with assigned variables that
   make it the end of its block by restructuring: in statement or return
   position, through `if`, `when`, `unless`, `cond`, `case`, `do`, `let`,
   `ucl/let` and nested ucl blocks. `A (when c (return x)) B` becomes
-  `A (if c <exit with x> (do B <next iteration>))`. An exit through a nested
-  loop -- itself a statement of the outer block's body -- assigns a result
-  variable and a flag, ends the inner loop, and the outer block tests the flag
-  right after it. Anywhere else -- an argument, an `fn`, an inner Clojure
-  `loop` -- it is a compile-time error naming the place. This is a second
+  `A (if c <exit with x> (do B <next iteration>))`. An exit inside a loop
+  ends it by not recurring: when the loop is the block's last form the exit's
+  value is the loop's; when something follows the loop -- the rest of an
+  outer loop's body -- the exit assigns a result variable and a flag, and the
+  code after the loop tests the flag (I25). Any loop: `ucl/dotimes`,
+  `ucl/loop`, a sequence function's, a Clojure `loop`/`recur`. Anywhere else
+  -- an argument, a binding's init, an `if` test, an `fn` -- it is a
+  compile-time error naming the place. This is a second
   boundary beside D53's: **a form ucl cannot compile to the host's own loop
   without run-time cost is a compile-time error.** Exceptions would carry an
   exit anywhere, but cost 1.7× to 40× on the submission hosts (§9.12).
@@ -1372,6 +1377,8 @@ Made while building v1, not in the grilling session; each is reversible.
 | I22 | `bb build` analyzes each submission with LeetCode's `ListNode`/`TreeNode` beside it; warnings (unnecessary casts) pass | D43; it also catches any bundler bug |
 | I23 | An expander registry: a ucl form that expands to a loop registers `{:applies? :expand}` by name -- the contract its own (`dotimes`), a vocabulary file its entries through `defapi`'s `:vocabularies`, reaching the backend map as `:expanders`. Return-position assignment (D35) and the walker consult it; an expander must not read `&env`, since an enclosing form may expand it | `ucl/loop` (D59) and the sequence functions (D51) both need D35 and the walker without editing them; the walker expanding an unknown form before walking it keeps its bindings' shadowing right |
 | I24 | `expand-counted-loop` -- `dotimes`' loop without its parsing (and, with D56, without its block) -- is the counted iteration every vocabulary expands to | a sequence function's inlined `fn` must not see a `nil` block of ucl's own (D56) |
+| I25 | A block is compiled eagerly by the form that establishes it (`ucl/block`, `ucl/defun`, `ucl/defmethod`, `ucl/dotimes`), outside in: an exit in return position is its value; in statement position the rest of the body moves into the branch that does not exit -- unless it would be copied (several branches complete normally), shadowed (a `let`), or repeated (a loop; a literal rest joins the loop's normal ends instead). Otherwise the exit assigns an internal result and flag and the rest is guarded. A block nothing exits from is its body unchanged | the exit `(when c (return-from f i))` in a loop compiles to JavaScript's `return i` -- read in the kernels' build; every existing submission builds identical |
+| I26 | `defapi` defines a macro for each of `vocabulary-names` -- a literal list every vocabulary adds its names to -- that expands through its registry entry (`expand-vocabulary`), without `:applies?` | one place for the API surface (D26) of `ucl/loop` and the sequence functions; agreed with the sequence-functions session |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1535,9 +1542,10 @@ backend selection by source root; mutable host collections only.
   - The cost of an exit through a nested loop (one flag test per outer
     iteration) and of a hash-table iteration step on each host is reasoned,
     not measured; the ports measure both (D62).
-  - An exit is static only (D55): `(return x)` inside an `fn`, an argument or
-    an inner Clojure `loop` does not compile. Write the inner loop as a
-    `ucl/loop` or `ucl/dotimes`, or test with `thereis`/`always`/`never`.
+  - An exit is static only (D55): `(return x)` inside an `fn`, an argument, a
+    binding's init or a test does not compile; nor inside `and`/`or`,
+    `when-let` and the other Clojure forms the block compiler does not know
+    (I25). Exit from a statement, or test with `thereis`/`always`/`never`.
   - `across` waits for strings and characters in the contract.
   - Hash-table iteration order differs on the JVM (D58).
 - **No JMH.** JVM numbers rest on simple shapes.
@@ -1614,6 +1622,7 @@ was a claim made without compiling or measuring first.
 | "ClojureDart's `and` costs ≈18% under the JIT" (H48, recorded as an open item) | The `late` on the local it forks into did (H54); every `if` in expression position paid it. Measured by removing one difference at a time, then fixed (D43). |
 | The prototype's typed `dotimes` counter | Overloaded `:hint`'s parameter count with `:local`: the JVM backend would have thrown, and Clojure refuses a hint there anyway. Became `:local-hint` (I20) before it shipped. |
 | Before the probe: "a function V8 inlines -- one closure, one call site -- costs close to nothing" | Only when the closure assigns nothing: one that assigns `ucl/let` variables costs 2–7× even inlined (§9.10, H58). |
+| D55 as designed: "an exit inside an inner Clojure `loop` is a compile-time error" | Any loop can be left statically: it ends by not recurring, with a flag when code follows it (I25). Found while implementing; the restriction was never needed. |
 | `ucl/loop` grilling: "`minimize p of-type fixnum into lo`" | The type follows `into`: `minimize p into lo of-type fixnum`. SBCL refused the first; found by running §4.3's examples on SBCL and ECL before writing them down. |
 
 The pattern is unchanged from `setf`: every serious error was an inference made

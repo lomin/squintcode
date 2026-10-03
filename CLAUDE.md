@@ -97,7 +97,9 @@ Rules:
   `length`, `vector-push-extend`, `make-hash-table`, `(gethash key table [default])`,
   `(slot-value obj 'slot)`, `setf`, `incf`, `decf`, `min`, `max`,
   `(let ((var init)…) (declare …) …)`, `let*`, `(dotimes (i n [result]) …)`,
-  `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
+  `(block name …)`, `(return-from name [v])`, `(return [v])` (`dotimes` is a block
+  nil, `defun` one named after it; an exit compiles only in statement or return
+  position), `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
   `defmethod`, `with-slots`, `princ-to-string`, `most-positive-fixnum`,
   `double-float-positive-infinity`.
   Types: `fixnum` (32-bit everywhere), `(signed-byte 53)`, `fixnum-vector`,

@@ -63,3 +63,23 @@
         (ucl/setf n (quot n 10))
         (recur)))
     s))
+
+(ucl/defun first-index-at-least-exit (xs target)
+  "An exit from the function out of a loop (D55, D56): static, no IIFE."
+  (declare (type fixnum-vector xs) (type fixnum target))
+  (ucl/dotimes (i (ucl/length xs))
+    (when (>= (ucl/elt xs i) target)
+      (ucl/return-from first-index-at-least-exit i)))
+  -1)
+
+(ucl/defun pair-with-sum (xs target)
+  "An exit through two nested loops: the result and flag path (D56)."
+  (declare (type fixnum-vector xs) (type fixnum target))
+  (ucl/let ((hits 0))
+    (declare (type fixnum hits))
+    (ucl/dotimes (i (ucl/length xs))
+      (ucl/dotimes (j i)
+        (when (== target (+ (ucl/elt xs i) (ucl/elt xs j)))
+          (ucl/return-from pair-with-sum (+ (* 1000 j) i))))
+      (ucl/incf hits))
+    (- -1 hits)))

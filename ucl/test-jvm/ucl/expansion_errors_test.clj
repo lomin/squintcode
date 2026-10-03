@@ -37,3 +37,23 @@
   (signals? #"takes a list of bindings" (ucl/let [x 1] x))
   (signals? #"malformed binding" (ucl/let ((x 1 2)) x))
   (signals? #"dotimes takes \(dotimes \(var count" (ucl/dotimes [i 3] i)))
+
+(deftest exits-test
+  (testing "an exit compiles only in statement or return position (D55)"
+    (signals? #"\(return-from b \.\.\.\) is in an argument of \(\+ \.\.\.\)"
+              (ucl/block b (+ 1 (ucl/return-from b 2))))
+    (signals? #"\(return-from b \.\.\.\) is in the test of if"
+              (ucl/block b (if (ucl/return-from b true) 1 2)))
+    (signals? #"\(return \.\.\.\) is in a binding of let"
+              (ucl/dotimes (i 3) (let [x (ucl/return 1)] x))))
+  (testing "an exit cannot leave a function"
+    (signals? #"\(return-from b \.\.\.\) is inside \(fn \.\.\.\)"
+              (ucl/block b (mapv (fn [x] (ucl/return-from b x)) [1])))
+    (signals? #"\(return \.\.\.\) is inside \(fn \.\.\.\)"
+              (ucl/dotimes (i 3) (run! (fn [x] (when x (ucl/return))) [i]))))
+  (testing "an exit to a block inside the fn compiles"
+    (is (nil? (expansion-error '(fn [] (ucl/block b (when true (ucl/return-from b 1)) 2))))))
+  (testing "an exit with no block"
+    (signals? #"\(return \.\.\.\) has no enclosing block named nil" (ucl/return 1))
+    (signals? #"\(return-from nowhere \.\.\.\) has no enclosing block named nowhere"
+              (ucl/block b (ucl/return-from nowhere 1)))))

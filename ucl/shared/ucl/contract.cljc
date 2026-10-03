@@ -566,6 +566,47 @@
         (coll? form)   (boolean (some #(mentions? % syms) form))
         :else false))
 
+;; ===========================================================================
+;; The expander registry
+;; ===========================================================================
+;; A ucl form that expands to a loop -- ucl/dotimes, ucl/loop, a sequence
+;; function -- is registered by its operator's name with
+;;   {:applies? (fn [form] ..)   ; tells it apart from a namesake (Clojure's loop)
+;;    :expand   (fn [backend form] expansion)}
+;; Return-position assignment (D35) runs a registered form as a statement by
+;; expanding it and assigning its expansion's return positions; the walker
+;; expands one it does not know before walking it, so the names its expansion
+;; binds shadow as they should.
+;;
+;; An expander is called with the backend of the macro that triggered it,
+;; which may be an enclosing form: it must not read the lexical environment.
+;; What needs a local's type, it emits as a ucl form (`elt`, `length`,
+;; `make-array`), which expands later where the environment is right.
+;;
+;; An entry for a form that establishes a block (D56) also has
+;;   :block (fn [form] [name])   ; the block's name, in a vector: nil is a name
+;; so that an exit inside it to that name is known to be its own.
+;;
+;; defapi puts every entry into the backend map as `:expanders`: the
+;; contract's own (`builtin-expanders`, defined last: its entries call
+;; expanders defined anywhere in this file), and each vocabulary's, a fn its
+;; file hands defapi in `:vocabularies`.
+
+(defn ^:macro-support add-expanders
+  "The backend map with the expanders of `vocabularies` (maps of entries)."
+  [backend vocabularies]
+  (update backend :expanders (fn [m] (apply merge m vocabularies))))
+
+(defn ^:macro-support registered
+  "The registry entry that applies to `form`, or nil."
+  [backend form]
+  (let [n (head-name form)
+        e (when n (get (:expanders backend) n))]
+    (when (and e ((:applies? e) form)) e)))
+
+(defn ^:macro-support expand-registered [backend form]
+  ((:expand (registered backend form)) backend form))
+
 (defn ^:macro-support expand-counted-loop
   "A loop of `v` from 0 below `n`, which is evaluated once, running `body`
    (statements); then `result`, evaluated with `v` bound to `n` (nil if
@@ -584,6 +625,326 @@
                                 (mentions? result #{v})       (list 'let [v lim] result)
                                 :else                         result))))))
 
+(defn ^:macro-support var-binding-name
+  "The variable of one ucl/let binding: `x`, `(x)` or `(x init)`."
+  [b]
+  (if (seq? b) (first b) b))
+
+(defn ^:macro-support always-true?
+  "A cond test that is always true, such as :else."
+  [form]
+  (or (keyword? form) (true? form)))
+
+(defn ^:macro-support assign-tails
+  "`form` as a statement whose every return position calls `assign` on the
+   value it would have returned. `recur` stays a `recur`."
+  [backend form assign]
+  (let [tail      (fn [f] (assign-tails backend f assign))
+        n         (head-name form)
+        head      (when n (first form))
+        args      (when n (rest form))
+        body-tail (fn [forms] (if (seq forms)
+                                (concat (butlast forms) [(tail (last forms))])
+                                [(assign nil)]))]
+    (cond
+      (nil? n)          (assign form)
+      (= "recur" n)     form
+      (= "if" n)        (let [[c a b] args] (list 'if c (tail a) (tail b)))
+      (= "if-not" n)    (let [[c a b] args] (list 'if c (tail b) (tail a)))
+      (= "when" n)      (list 'if (first args) (tail (list* 'do (rest args))) (assign nil))
+      (= "when-not" n)  (list 'if (first args) (assign nil) (tail (list* 'do (rest args))))
+      (= "cond" n)      (if (empty? args)
+                          (assign nil)
+                          (let [[c e & more] args]
+                            (if (always-true? c)
+                              (tail e)
+                              (list 'if c (tail e) (tail (list* 'cond more))))))
+      (= "case" n)      (let [[e & clauses] args
+                              cnt (count clauses)]
+                          (list* head e (apply list (map-indexed
+                                                     (fn [i c] (if (and (even? i) (< (inc i) cnt)) c (tail c)))
+                                                     clauses))))
+      (= "do" n)        (list* 'do (body-tail args))
+
+      (and (contains? #{"let" "let*" "loop" "loop*"} n) (vector? (first args)))
+      (list* head (first args) (body-tail (rest args)))
+
+      (and (contains? #{"let" "let*"} n) (seq? (first args)))
+      (let [[decls body] (split-with declare-form? (rest args))]
+        (list* head (first args) (concat decls (body-tail body))))
+
+      (registered backend form)
+      (tail (expand-registered backend form))
+
+      (= "with-slots" n)
+      (list* head (first args) (second args) (body-tail (drop 2 args)))
+
+      :else (assign form))))
+
+;; ===========================================================================
+;; Blocks and exits (D55, D56)
+;; ===========================================================================
+;; A block is compiled eagerly, by the form that establishes it: ucl/block,
+;; ucl/defun and ucl/defmethod (their name), ucl/dotimes and ucl/loop (nil).
+;; Every exit to it -- `(return-from name [v])`, `(return [v])` for nil -- is
+;; made static, and a block nothing exits from is its body unchanged.
+;;
+;; Forms are rewritten from the outside in. An exit in return position is its
+;; value. An exit in statement position takes the rest of its body with it:
+;; `A (when c (return x)) B` becomes `A (if c x (do B))`, the rest pushed into
+;; the branch that does not exit -- unless that would copy it (several
+;; branches complete normally), or the rest cannot follow it there (a loop,
+;; which repeats; a `let` that would shadow the rest's names). Then the exit
+;; assigns a result and a flag instead, ends what it is in -- a loop, by not
+;; recurring -- and the rest is guarded: `(if <flag> <result> rest)`.
+;;
+;; An exit anywhere else -- an argument, a binding's init, an `if` test, an
+;; `fn` -- does not compile (D55). A registered form in the way (ucl/dotimes,
+;; ucl/loop, a sequence function) is expanded first; one that establishes a
+;; block of the same name has its own exits. Exits to other blocks are left
+;; alone: an enclosing block was compiled first, and an inner one compiles its
+;; own when it expands.
+
+(defn ^:macro-support exit-target
+  "[name value-form] of an exit form, or nil."
+  [form]
+  (case (head-name form)
+    "return-from" (do (when-not (<= 2 (count form) 3)
+                        (fail! (str "return-from takes a block name and an optional value: "
+                                    (pr-str form))
+                               {:form form}))
+                      [(second form) (nth form 2 nil)])
+    "return"      (do (when (> (count form) 2)
+                        (fail! (str "return takes an optional value: " (pr-str form)) {:form form}))
+                      [nil (second form)])
+    nil))
+
+(defn ^:macro-support exit-text
+  "How an exit to block `name` reads in a message."
+  [name]
+  (if (nil? name) "(return ...)" (str "(return-from " name " ...)")))
+
+(defn ^:macro-support shadows-block?
+  "Does `form` establish a block named `name` -- so exits inside are its own?"
+  [backend name form]
+  (let [e (registered backend form)]
+    (boolean (when (and e (:block e)) (= [name] ((:block e) form))))))
+
+(defn ^:macro-support exits?
+  "Does `form` contain an exit to the block `name`?"
+  [backend name form]
+  (cond
+    (and (seq? form) (seq form))
+    (let [t (exit-target form)]
+      (cond
+        (and t (= name (first t)))         true
+        (= "quote" (head-name form))       false
+        (shadows-block? backend name form) false
+        :else (boolean (some #(exits? backend name %) form))))
+    (map? form)    (boolean (some #(exits? backend name %) (concat (keys form) (vals form))))
+    (coll? form)   (boolean (some #(exits? backend name %) form))
+    :else false))
+
+(defn ^:macro-support check-no-escape
+  "Fail if an exit to `name` inside `form` would leave a function (D55)."
+  [backend name form]
+  (let [n (head-name form)
+        in-fn (fn [what]
+                (fail! (str (exit-text name) " is inside " what ": an exit cannot leave a "
+                            "function (D55). Return a value from the function and test it "
+                            "where the block is.")
+                       {:block name :form form}))]
+    (cond
+      (and (seq? form) (seq form))
+      (cond
+        (or (= "quote" n) (shadows-block? backend name form)) nil
+        (contains? #{"fn" "fn*" "reify" "proxy" "deftype" "defrecord" "defn"} n)
+        (when (exits? backend name form) (in-fn (str "(" n " ...)")))
+        (= "letfn" n)
+        (do (when (exits? backend name (second form)) (in-fn "a letfn function"))
+            (doseq [f (nnext form)] (check-no-escape backend name f)))
+        :else (doseq [f form] (check-no-escape backend name f)))
+      (map? form) (doseq [f (concat (keys form) (vals form))] (check-no-escape backend name f))
+      (coll? form) (doseq [f form] (check-no-escape backend name f))
+      :else nil)))
+
+(defn ^:macro-support seq-do
+  "(do a b), flattening b's own do."
+  [a b]
+  (if (and (seq? b) (= "do" (head-name b)))
+    (list* 'do a (rest b))
+    (list 'do a b)))
+
+(defn ^:macro-support expand-block
+  "One form: `body` as the block `name`, every exit to it static (D55)."
+  [backend name body]
+  (if-not (some #(exits? backend name %) body)
+    (if (next body) (list* 'do body) (first body))
+    (let [_     (doseq [f body] (check-no-escape backend name f))
+          flag  (gensym "exited")
+          res   (gensym "result")
+          used  (atom false)
+          read  (op backend :var :read)
+          write (op backend :var :write)
+          bind  (op backend :var :bind)
+          ex?   (fn [form] (exits? backend name form))
+          no-ex (fn [form where]
+                  (when (ex? form)
+                    (fail! (str (exit-text name) " is in " where ": ucl compiles an exit only in "
+                                "statement or return position (D55). Test a value there and exit "
+                                "from a statement.")
+                           {:block name :form form})))
+          exited? (fn [] (reset! used true) (list '== (read [flag :fixnum] [flag :fixnum]) 1))
+          result  (fn [] (read [res nil] [res nil]))
+          ;; mode :direct -- an exit's value is the value of what it is in;
+          ;; mode :flag   -- an exit assigns result and flag, and is nil.
+          exit-v  (fn [mode v]
+                    (if (= mode :direct)
+                      v
+                      (do (reset! used true)
+                          (list 'do (write [res nil] [res nil] v) (write [flag :fixnum] [flag :fixnum] 1) nil))))
+          after   (fn [mode] (if (= mode :direct) (result) nil))
+          trivial-k? (fn [k] (or (= k :ret) (trivial? k)))]
+      (letfn [;; How many ways `form` completes without exiting.
+              (paths [form]
+                (if-not (ex? form)
+                  1
+                  (let [n (head-name form) args (rest form)]
+                    (cond
+                      (exit-target form) 0
+                      (= "if" n)       (+ (paths (second args)) (paths (nth args 2 nil)))
+                      (= "if-not" n)   (+ (paths (second args)) (paths (nth args 2 nil)))
+                      (= "when" n)     (inc (paths (list* 'do (rest args))))
+                      (= "when-not" n) (inc (paths (list* 'do (rest args))))
+                      (= "cond" n)     (let [cs (partition-all 2 args)]
+                                         (+ (reduce + (map #(paths (second %)) cs))
+                                            (if (some #(always-true? (first %)) cs) 0 1)))
+                      (= "case" n)     (let [cl (rest args)]
+                                         (+ (reduce + (map paths (take-nth 2 (rest cl))))
+                                            (if (odd? (count cl)) (paths (last cl)) 1)))
+                      (= "do" n)       (reduce * 1 (map paths args))
+                      (registered backend form) (paths (expand-registered backend form))
+                      :else 1))))
+              ;; `forms` in order, then `k`: a form, or :ret for "their value".
+              (tseq [forms k mode]
+                (cond
+                  (empty? forms)        (if (= k :ret) nil k)
+                  (empty? (rest forms)) (t (first forms) k mode)
+                  :else (let [[f & more] forms
+                              rest-form (tseq more k mode)]
+                          (if (ex? f) (t f rest-form mode) (seq-do f rest-form)))))
+              ;; `form`, then `k`, by setting a flag where `k` cannot follow.
+              (guard [form k mode]
+                (list 'do (t form nil :flag) (list 'if (exited?) (after mode) k)))
+              ;; Branches that each continue with `k`.
+              (branch [form k mode build]
+                (if (or (trivial-k? k) (<= (paths form) 1))
+                  (build k mode)
+                  (guard form k mode)))
+              ;; A body that binds `names` and then continues with `k`.
+              (bound [form k mode names build]
+                (if (or (= k :ret) (not (mentions? k (set names))))
+                  (build k mode)
+                  (guard form k mode)))
+              (check-bindings [bs what]
+                (doseq [[_ init] (partition 2 bs)] (no-ex init (str "a binding of " what))))
+              (t [form k mode]
+                (if-not (ex? form)
+                  (if (= k :ret) form (seq-do form k))
+                  (let [n (head-name form) [head & args] form]
+                    (cond
+                      (exit-target form)
+                      (let [[_ v] (exit-target form)]
+                        (no-ex v "the value of an exit")
+                        (exit-v mode v))
+
+                      (contains? #{"if" "if-not"} n)
+                      (let [[c a b] args
+                            [a b] (if (= "if" n) [a b] [b a])]
+                        (no-ex c (str "the test of " n))
+                        (branch form k mode
+                                (fn [k mode] (list 'if c (t a k mode) (t b k mode)))))
+
+                      (= "when" n)     (t (list 'if (first args) (list* 'do (rest args)) nil) k mode)
+                      (= "when-not" n) (t (list 'if (first args) nil (list* 'do (rest args))) k mode)
+
+                      (= "cond" n)
+                      (t (reduce (fn [else [c e]] (if (always-true? c) e (list 'if c e else)))
+                                 nil (reverse (partition 2 args)))
+                         k mode)
+
+                      (= "case" n)
+                      (let [[e & cl] args]
+                        (no-ex e "the key of case")
+                        (branch form k mode
+                                (fn [k mode]
+                                  (list* head e (map-indexed (fn [i c] (if (and (even? i) (< (inc i) (count cl)))
+                                                                         c (t c k mode)))
+                                                             cl)))))
+
+                      (= "do" n) (tseq args k mode)
+
+                      (and (contains? #{"let" "let*"} n) (vector? (first args)))
+                      (let [[bs & body] args]
+                        (check-bindings bs n)
+                        (bound form k mode (mapcat binding-symbols (take-nth 2 bs))
+                               (fn [k mode] (list head bs (tseq body k mode)))))
+
+                      (and (contains? #{"loop" "loop*"} n) (vector? (first args)))
+                      (let [[bs & body] args]
+                        (check-bindings bs n)
+                        (cond
+                          (= k :ret) (list head bs (tseq body :ret mode))
+                          ;; a literal after the loop -- `nil`, `-1` -- joins its
+                          ;; normal ends: nothing can shadow it or recur in it
+                          (and (= mode :direct) (literal? k))
+                          (list head bs (tseq [(assign-tails backend (list* 'do body)
+                                                             (fn [x] (if (exit-target x) x (seq-do x k))))]
+                                              :ret mode))
+                          (and (= mode :flag) (trivial? k)) (seq-do (list head bs (tseq body :ret :flag)) k)
+                          :else (guard form k mode)))
+
+                      (and (contains? #{"let" "let*"} n) (seq? (first args)))
+                      (let [[bs & more] args
+                            [decls body] (split-with declare-form? more)]
+                        (doseq [b bs] (when (seq? b) (no-ex (second b) (str "a binding of ucl/" n))))
+                        (bound form k mode (map var-binding-name bs)
+                               (fn [k mode] (list* head bs (concat decls [(tseq body k mode)])))))
+
+                      (= "with-slots" n)
+                      (let [[slots obj & body] args]
+                        (no-ex obj "the object of with-slots")
+                        (bound form k mode (map var-binding-name slots)
+                               (fn [k mode] (list head slots obj (tseq body k mode)))))
+
+                      (registered backend form)
+                      (t (expand-registered backend form) k mode)
+
+                      :else
+                      (no-ex form (str "an argument of (" (if (symbol? head) head "...") " ...)"))))))]
+        (let [out (tseq body :ret :direct)]
+          (if @used
+            (list 'let (into (bind flag :fixnum 0 {:internal? true}) (bind res nil nil {:internal? true}))
+                  out)
+            out))))))
+
+(defn ^:macro-support expand-block-body
+  "`body` (forms) as the block `name`: unchanged when nothing exits to it."
+  [backend name body]
+  (if (some #(exits? backend name %) body)
+    [(expand-block backend name body)]
+    body))
+
+(defn ^:macro-support expand-stray-exit
+  "An exit no block compiled: it has no block, or none could make it static."
+  [form]
+  (let [[name] (exit-target form)]
+    (fail! (str (exit-text name) " has no enclosing block named " (pr-str name)
+                (when (nil? name) " (ucl/dotimes or ucl/loop)")
+                ", or is in a position ucl cannot compile statically (D55): "
+                (pr-str form))
+           {:form form})))
+
 (defn ^:macro-support expand-dotimes
   "(dotimes (var count [result]) body...): var runs from 0 below count, which
    is evaluated once; result is evaluated with var bound to count."
@@ -594,55 +955,10 @@
   (let [[v n result] spec
         [decls body] (split-with declare-form? body)]
     (declared-types decls)
-    (expand-counted-loop backend v n result body)))
-
-;; ===========================================================================
-;; The expander registry
-;; ===========================================================================
-;; A ucl form that expands to a loop -- ucl/dotimes, ucl/loop, a sequence
-;; function -- is registered by its operator's name with
-;;   {:applies? (fn [form] ..)   ; tells it apart from a namesake (Clojure's loop)
-;;    :expand   (fn [backend form] expansion)}
-;; Return-position assignment (D35) runs a registered form as a statement by
-;; expanding it and assigning its expansion's return positions; the walker
-;; expands one it does not know before walking it, so the names its expansion
-;; binds shadow as they should.
-;;
-;; An expander is called with the backend of the macro that triggered it,
-;; which may be an enclosing form: it must not read the lexical environment.
-;; What needs a local's type, it emits as a ucl form (`elt`, `length`,
-;; `make-array`), which expands later where the environment is right.
-;;
-;; The contract registers its own forms here; a vocabulary in its own file
-;; hands defapi a fn returning its entries (`:vocabularies`), which reach the
-;; backend map as `:expanders`.
-
-(defn ^:macro-support builtin-expanders []
-  {"dotimes" {:applies? (fn [form] (seq? (second form)))
-              :expand   (fn [backend form] (expand-dotimes backend (second form) (nnext form)))}})
-
-(defn ^:macro-support add-expanders
-  "The backend map with the expanders of `vocabularies` (maps of entries)."
-  [backend vocabularies]
-  (update backend :expanders (fn [m] (apply merge m vocabularies))))
-
-(defn ^:macro-support registered
-  "The registry entry that applies to `form`, or nil."
-  [backend form]
-  (let [n (head-name form)
-        e (when n (get (merge (builtin-expanders) (:expanders backend)) n))]
-    (when (and e ((:applies? e) form)) e)))
-
-(defn ^:macro-support expand-registered [backend form]
-  ((:expand (registered backend form)) backend form))
+    (expand-block backend nil [(expand-counted-loop backend v n result body)])))
 
 (defn ^:macro-support shadow [env syms]
   (update env :shadowed into syms))
-
-(defn ^:macro-support var-binding-name
-  "The variable of one ucl/let binding: `x`, `(x)` or `(x init)`."
-  [b]
-  (if (seq? b) (first b) b))
 
 (defn ^:macro-support vector-binder? [n]
   (contains? #{"let" "let*" "loop" "loop*" "binding" "doseq" "for" "dotimes"
@@ -837,57 +1153,6 @@
                  (head-name form))
       (some? (registered backend form))))
 
-(defn ^:macro-support always-true?
-  "A cond test that is always true, such as :else."
-  [form]
-  (or (keyword? form) (true? form)))
-
-(defn ^:macro-support assign-tails
-  "`form` as a statement whose every return position calls `assign` on the
-   value it would have returned. `recur` stays a `recur`."
-  [backend form assign]
-  (let [tail      (fn [f] (assign-tails backend f assign))
-        n         (head-name form)
-        head      (when n (first form))
-        args      (when n (rest form))
-        body-tail (fn [forms] (if (seq forms)
-                                (concat (butlast forms) [(tail (last forms))])
-                                [(assign nil)]))]
-    (cond
-      (nil? n)          (assign form)
-      (= "recur" n)     form
-      (= "if" n)        (let [[c a b] args] (list 'if c (tail a) (tail b)))
-      (= "if-not" n)    (let [[c a b] args] (list 'if c (tail b) (tail a)))
-      (= "when" n)      (list 'if (first args) (tail (list* 'do (rest args))) (assign nil))
-      (= "when-not" n)  (list 'if (first args) (assign nil) (tail (list* 'do (rest args))))
-      (= "cond" n)      (if (empty? args)
-                          (assign nil)
-                          (let [[c e & more] args]
-                            (if (always-true? c)
-                              (tail e)
-                              (list 'if c (tail e) (tail (list* 'cond more))))))
-      (= "case" n)      (let [[e & clauses] args
-                              cnt (count clauses)]
-                          (list* head e (apply list (map-indexed
-                                                     (fn [i c] (if (and (even? i) (< (inc i) cnt)) c (tail c)))
-                                                     clauses))))
-      (= "do" n)        (list* 'do (body-tail args))
-
-      (and (contains? #{"let" "let*" "loop" "loop*"} n) (vector? (first args)))
-      (list* head (first args) (body-tail (rest args)))
-
-      (and (contains? #{"let" "let*"} n) (seq? (first args)))
-      (let [[decls body] (split-with declare-form? (rest args))]
-        (list* head (first args) (concat decls (body-tail body))))
-
-      (registered backend form)
-      (tail (expand-registered backend form))
-
-      (= "with-slots" n)
-      (list* head (first args) (second args) (body-tail (drop 2 args)))
-
-      :else (assign form))))
-
 (defn ^:macro-support parse-var-bindings
   "ucl/let bindings -- `((x init) (y) z)` -- as [[var init] ...]."
   [what bindings]
@@ -987,7 +1252,8 @@
         types  (declared-types decls)
         params (hint-params backend required types)]
     (list* 'defn fname (concat (when doc [doc]) [params]
-                               (with-assignable backend required types body)))))
+                               (with-assignable backend required types
+                                                (expand-block-body backend fname body))))))
 
 ;; setf needs assign-tails (D35). ClojureDart's macro host has no forward
 ;; declarations (its `declare` is a no-op), so the contract defines every fn
@@ -1039,7 +1305,8 @@
           params (hint-params backend required types)]
       ((op backend :method :define)
        {:name mname :self self :struct struct :params params :doc doc
-        :body (with-assignable backend required types body)}))))
+        :body (with-assignable backend required types
+                               (expand-block-body backend mname body))}))))
 
 ;; ===========================================================================
 ;; defapi / defruntime: a backend's whole API surface (D26)
@@ -1051,10 +1318,37 @@
 ;; every backend declares: that alias resolves wherever the backend's macros are
 ;; compiled, whatever a host names its macro-time namespace (H20).
 
+;; Every vocabulary's operator names: defapi defines a macro for each, which
+;; expands through that name's registry entry. A literal list, as api-names:
+;; a top-level def that is not one would ride into every submission (H31).
+(defn ^:macro-support vocabulary-names []
+  '[])
+
+(defn ^:macro-support expand-vocabulary
+  "A vocabulary macro's expansion: its name's registry entry, called on the
+   whole form. No `:applies?`: the macro is already the right form."
+  [backend form]
+  (let [e (get (:expanders backend) (head-name form))]
+    (if e
+      ((:expand e) backend form)
+      (fail! (str "no vocabulary in this backend defines " (first form)
+                  " -- is it in defapi's :vocabularies?")
+             {:form form}))))
+
+;; The contract's own registry entries (I23), defined last: they call
+;; expanders defined anywhere above.
+(defn ^:macro-support builtin-expanders []
+  {"dotimes" {:applies? (fn [form] (seq? (second form)))
+              :expand   (fn [backend form] (expand-dotimes backend (second form) (nnext form)))
+              :block    (fn [_] [nil])}
+   "block"   {:applies? (fn [form] (and (next form) (or (nil? (second form)) (symbol? (second form)))))
+              :expand   (fn [backend form] (expand-block backend (second form) (nnext form)))
+              :block    (fn [form] [(second form)])}})
+
 (def ^:macro-support api-names
   '[elt length vector-push-extend make-array
     gethash make-hash-table slot-value
-    setf incf decf let let* dotimes
+    setf incf decf let let* dotimes block return-from return
     defun defstruct defmethod with-slots
     princ-to-string])
 
@@ -1065,9 +1359,9 @@
    alias the backend declares) returning each vocabulary's registry entries."
   ([emit-form] `(defapi ~emit-form {}))
   ([emit-form opts]
-   (let [emit-form (if (seq (:vocabularies opts))
-                     `(~'contract/add-expanders ~emit-form [~@(map list (:vocabularies opts))])
-                     emit-form)]
+   (let [emit-form `(~'contract/add-expanders
+                     ~emit-form
+                     [(~'contract/builtin-expanders) ~@(map list (:vocabularies opts))])]
    `(do
       (defmacro ~'elt
         "(elt sequence index) -- read an element; a place for setf."
@@ -1141,6 +1435,18 @@
         "(dotimes (var count [result]) (declare ...) body...)"
         [~'spec & ~'body]
         (~'contract/expand-dotimes ~emit-form ~'spec ~'body))
+      (defmacro ~'block
+        "(block name body...) -- `return-from` name leaves it with a value."
+        [~'block-name & ~'body]
+        (~'contract/expand-block ~emit-form ~'block-name ~'body))
+      (defmacro ~'return-from
+        "(return-from name [value]) -- leave the enclosing block `name`."
+        [~'block-name & ~'value]
+        (~'contract/expand-stray-exit (list* '~'return-from ~'block-name ~'value)))
+      (defmacro ~'return
+        "(return [value]) -- leave the enclosing block nil (ucl/dotimes, ucl/loop)."
+        [& ~'value]
+        (~'contract/expand-stray-exit (list* '~'return ~'value)))
       (defmacro ~'princ-to-string
         "(princ-to-string object) -- an integer's decimal digits, or a string itself."
         [~'object]
@@ -1149,6 +1455,10 @@
         "(with-slots (slot...) object body...)"
         [~'slots ~'object & ~'body]
         (~'contract/expand-with-slots ~emit-form ~'slots ~'object ~'body))
+      ~@(map (fn [n]
+               `(defmacro ~n [& ~'args]
+                  (~'contract/expand-vocabulary ~emit-form ~'&form)))
+             (vocabulary-names))
       ~@(when-not (:inline-extrema? opts)
           [`(defmacro ~'min
               "(min real...) -- inline in call position, a function as a value."
