@@ -255,13 +255,17 @@
                 (recur i (update p :withs conj group) main?))
 
               (contains? #{"for" "as"} k)
-              (let [[c i] (parse-for ts (inc i) form)]
+              ;; clauses joined by `and` are a group: initialized and stepped in parallel
+              (let [gid (count (:fors p))
+                    [cs i] (loop [i (inc i) cs []]
+                             (let [[c i] (parse-for ts i form)
+                                   cs (conj cs (assoc c :group gid))]
+                               (if (kw? (get ts i) #{"and"}) (recur (inc i) cs) [cs i])))
+                    cs (if (next cs) (mapv #(assoc % :grouped true) cs) cs)]
                 (when main? (fail! (str "a for clause after a main clause (CLHS 6.1.1.4): for "
-                                        (:var c))
+                                        (:var (first cs)))
                                    form))
-                (when (kw? (get ts i) #{"and"})
-                  (fail! "for ... and ... (parallel stepping) is not built yet (§13)" form))
-                (recur i (update p :fors conj c) main?))
+                (recur i (update p :fors into cs) main?))
 
               (contains? #{"initially" "finally"} k)
               (let [[fs i'] (compound-forms ts (inc i))]
@@ -271,7 +275,7 @@
               (recur (+ i 2) (update p :main conj {:clause (keyword k) :form (get ts (inc i))}) true)
 
               (= "loop-finish" k)
-              (fail! "loop-finish is not built yet (§13); end the loop with while or until" form)
+              (fail! "loop-finish is a form: do (loop-finish)" form)
 
               (contains? (main-clause-keywords) k)
               (let [[c i] (parse-selectable ts i form)]
@@ -320,14 +324,15 @@
   "Fold `ops` around `tail`, innermost last:
      [:stmt f]          (do f ...)
      [:bind s f]        (let [s f] ...)
-     [:end test pos?]   when `test` is truthy (pos?) or falsy, the epilogue
-   `epi` -- the epilogue form."
+     [:end test pos? e] when `test` is truthy (pos?) or falsy, the epilogue:
+                        `e`, or `epi`"
   [ops tail epi]
-  (reduce (fn [inner [op a b]]
-            (case op
-              :stmt (contract/seq-do a inner)
-              :bind (list 'let [a b] inner)
-              :end  (if b (list 'if a epi inner) (list 'if a inner epi))))
+  (reduce (fn [inner [op a b e]]
+            (let [epi (if e e epi)]
+              (case op
+                :stmt (contract/seq-do a inner)
+                :bind (list 'let [a b] inner)
+                :end  (if b (list 'if a epi inner) (list 'if a inner epi)))))
           tail
           (reverse ops)))
 
@@ -339,25 +344,34 @@
     (second guard) (list 'if (first guard) f otherwise)
     :else (list 'if (first guard) otherwise f)))
 
-(defn ^:macro-support finishes?
-  "Does `form` call loop-finish (not built yet, §13)?"
+(defn ^:macro-support nested-loop?
+  "Is `form` a ucl/loop of its own -- whose loop-finish is its own?"
   [form]
-  (cond (and (seq? form) (= "loop-finish" (contract/head-name form))) true
-        (coll? form) (boolean (some finishes? form))
-        :else false))
+  (and (seq? form) (= "loop" (contract/head-name form)) (not (vector? (second form)))))
+
+(defn ^:macro-support finish->exit
+  "`form` with each (loop-finish) of this loop -- not a nested one's -- as `exit`."
+  [form exit]
+  (cond
+    (and (seq? form) (= "loop-finish" (contract/head-name form)))
+    (if (next form) (fail! "loop-finish takes no arguments" form) exit)
+    (nested-loop? form) form
+    (seq? form) (apply list (map #(finish->exit % exit) form))
+    (vector? form) (mapv #(finish->exit % exit) form)
+    (map? form) (into {} (map (fn [[k v]] [(finish->exit k exit) (finish->exit v exit)]) form))
+    :else form))
 
 (defn ^:macro-support expand-loop
   "The registry's :expand for ucl/loop."
   [backend form]
-  (when (finishes? (rest form))
-    (fail! "loop-finish is not built yet (§13); end the loop with while or until" form))
   (let [{:keys [simple withs fors main initially finally] bname :name} (parse-loop form)
         u (fn [n] (ucl-sym form n))]
     (if simple
       (list (u "block") nil (list* 'loop [] (concat simple [(list 'recur)])))
-      (let [_ (let [vs (map :var fors)]
+      (let [_ (let [vs (concat (map :var fors) (keep :other fors) (mapcat #(map :var %) withs))]
                 (when-not (= (count vs) (count (set vs)))
-                  (fail! (str "a for name is bound twice: " (pr-str vs)) form)))
+                  ;; SBCL signals, ECL lets the later one win (D60)
+                  (fail! (str "a for or with name is bound twice: " (pr-str vs)) form)))
             accs  (accumulations main)
             anon  (filter #(nil? (:into %)) accs)
             _     (when (< 1 (count (set (map (comp acc-class :kind) anon))))
@@ -418,6 +432,11 @@
             epi-body (concat finally [result])
             epi   (if (next epi-body) (list* 'do epi-body) (first epi-body))
             block (fn [v] (list (u "return-from") bname v))
+            ;; (loop-finish) ends the iteration as an end test does: an exit
+            ;; (D55) from a block around the loop, with the epilogue as its value
+            finish-exit (list (u "return-from") 'loop-finish epi)
+            finishes? (not= main (finish->exit main finish-exit))
+            main  (finish->exit main finish-exit)
             ;; ---- for clauses: once-evaluated forms, first value, next value, end test
             fors' (mapv (fn [c]
                           (case (:kind c)
@@ -485,7 +504,7 @@
             fors' (let [idx (some (fn [[f c]] (when (= :across (:kind c)) (first (:vars f))))
                                   (map vector fors' fors))]
                     (mapv (fn [f c]
-                            (if (and idx (= :arith (:kind c)) (= :up (:dir c))
+                            (if (and idx (= :arith (:kind c)) (= :up (:dir c)) (not (:grouped c))
                                      (not (contains? c :limit))
                                      (or (not (contains? c :from)) (integer? (:from c)))
                                      (or (not (contains? c :by)) (= 1 (:by c)))
@@ -601,28 +620,84 @@
                                                         finally)
                                                 #{v}))
             after-ops (fn [i f] (keep (fn [[v x]] (when (needed-after? i v) [:bind v x])) (:after f)))
-            step-ops (vec (apply concat
-                                 (map-indexed (fn [i f]
-                                                (concat (map (fn [[v x]] [:bind v x]) (:step f))
-                                                        (when (:test f) [[:end (:test f) true]])
-                                                        (after-ops i f)))
-                                              fors')))
+            ;; for clauses in groups (`and`): [[index [f c]] ...] per group
+            groups (partition-by (fn [[_ [_ c]]] (:group c)) (map-indexed vector (map vector fors' fors)))
+            iterator? (fn [c] (contains? #{:across :hash} (:kind c)))
+            ;; a group's values in parallel: each into a temporary, then bound
+            parallel (fn [pairs]
+                       (let [ts (map (fn [[v x]] [(gensym (name v)) v x]) pairs)]
+                         (concat (map (fn [[t _ x]] [:bind t x]) ts)
+                                 (map (fn [[t v _]] [:bind v t]) ts))))
+            ;; A group steps as SBCL's LOOP does: each iterator's index or entry
+            ;; and its end test, in order; then every variable, in parallel; then
+            ;; the arithmetic limits, on the new values (H67)
+            step-ops (vec (mapcat
+                           (fn [group]
+                             (if (next group)
+                               (concat
+                                (mapcat (fn [[_ [f c]]]
+                                          (when (iterator? c)
+                                            (concat (map (fn [[v x]] [:bind v x]) (:step f))
+                                                    [[:end (:test f) true]])))
+                                        group)
+                                (parallel (mapcat (fn [[_ [f c]]] (if (iterator? c) (:after f) (:step f))) group))
+                                (keep (fn [[_ [f c]]] (when (and (not (iterator? c)) (:test f)) [:end (:test f) true]))
+                                      group))
+                               (let [[[i [f _]]] group]
+                                 (concat (map (fn [[v x]] [:bind v x]) (:step f))
+                                         (when (:test f) [[:end (:test f) true]])
+                                         (after-ops i f)))))
+                           groups))
             top-ops (vec (mapcat (fn [f] (map (fn [[v x]] [:bind v x]) (:top f))) fors'))
             body (render (concat top-ops main-ops step-ops) (list* 'recur params) epi)
             the-loop (list 'loop (vec (mapcat (fn [s] [(hint s) s]) params)) body)
+            the-loop (if finishes? (list (u "block") 'loop-finish the-loop) the-loop)
             ;; the prologue: each for clause in turn, its end test at its first value
             pre-loop (render (map (fn [[n x]] [:bind n x]) @repeats) the-loop epi)
-            prologue (reduce (fn [inner [f bound]]
-                               (let [ops (concat (map (fn [[a b]] [:bind a b]) (partition 2 (:onces f)))
-                                                 (map (fn [[v x]] [:bind v x]) (:init f))
-                                                 (when (:test f) [[:end (:test f) true]])
-                                                 (after-ops (:index f) f))]
-                                 (render ops inner (epi-at bound))))
-                             pre-loop
-                             (reverse (map (fn [f c before i]
-                                             ;; at its end test, an across name is not bound yet
-                                             [(assoc f :index i) (if (contains? #{:across :hash} (:kind c)) before (into before (clause-names c)))])
-                                           fors' fors (reductions into [] (map clause-names fors)) (range))))
+            ;; the prologue: each group in turn, its end tests at its first
+            ;; values, each test's epilogue binding what is not bound yet
+            prologue (reduce
+                      (fn [inner [group before]]
+                        (let [onces (mapcat (fn [[_ [f _]]] (map (fn [[a b]] [:bind a b]) (partition 2 (:onces f))))
+                                            group)]
+                          (if (next group)
+                            ;; as SBCL and ECL: the counters' starts, in parallel;
+                            ;; then iterators in order; then the = clauses' first
+                            ;; values, which see those (H67); then the limits
+                            (let [values (filter (fn [[_ [_ c]]] (= :arith (:kind c))) group)
+                                  equals (filter (fn [[_ [_ c]]] (= :equals (:kind c))) group)
+                                  bound-a (into before (mapcat (fn [[_ [_ c]]] (clause-names c)) values))
+                                  [its-ops bound-b]
+                                  (reduce (fn [[ops bound] [_ [f c]]]
+                                            [(concat ops
+                                                     (map (fn [[v x]] [:bind v x]) (:init f))
+                                                     [[:end (:test f) true (epi-at bound)]]
+                                                     (map (fn [[v x]] [:bind v x]) (:after f)))
+                                             (into bound (clause-names c))])
+                                          [[] bound-a]
+                                          (filter (fn [[_ [_ c]]] (iterator? c)) group))]
+                              (render (concat onces
+                                              (parallel (mapcat (fn [[_ [f _]]] (:init f)) values))
+                                              its-ops
+                                              (parallel (mapcat (fn [[_ [f _]]] (:init f)) equals))
+                                              (keep (fn [[_ [f _]]]
+                                                      (when (:test f)
+                                                        [:end (:test f) true
+                                                         (epi-at (into bound-b (mapcat (fn [[_ [_ c]]] (clause-names c)) equals)))]))
+                                                    values))
+                                      inner epi))
+                            (let [[[i [f c]]] group
+                                  ;; at its end test, an iterator's name is not bound yet
+                                  bound (if (iterator? c) before (into before (clause-names c)))]
+                              (render (concat onces
+                                              (map (fn [[v x]] [:bind v x]) (:init f))
+                                              (when (:test f) [[:end (:test f) true (epi-at bound)]])
+                                              (after-ops i f))
+                                      inner epi)))))
+                      pre-loop
+                      (reverse (map vector groups
+                                    (reductions into [] (map (fn [g] (mapcat (fn [[_ [_ c]]] (clause-names c)) g))
+                                                             groups)))))
             prologue (render (concat (when acc [[:bind acc (if acc-sentinel acc-sentinel 0)]])
                                      (when acc-first [[:bind acc-first true]])
                                      (keep (fn [[_ e]] (when (:first e) [:bind (:first e) true])) intos))
@@ -649,6 +724,10 @@
 (defn ^:macro-support expanders
   "ucl/loop's registry entry (I23), for defapi's :vocabularies."
   []
-  {"loop" {:applies? (fn [form] (not (vector? (second form))))
+  {"loop-finish" {:applies? (fn [_] false)   ; only ucl/loop rewrites it
+                  :expand   (fn [_ form]
+                              (fail! "loop-finish outside a ucl/loop's main clauses -- it ends the loop it is in"
+                                     form))}
+   "loop" {:applies? (fn [form] (not (vector? (second form))))
            :expand   expand-loop
            :block    (fn [form] [(when (kw? (second form) #{"named"}) (nth form 2 nil))])}})

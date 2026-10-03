@@ -1364,7 +1364,7 @@
 ;; expands through that name's registry entry. A literal list, as api-names:
 ;; a top-level def that is not one would ride into every submission (H31).
 (defn ^:macro-support vocabulary-names []
-  '[loop count count-if count-if-not find find-if find-if-not
+  '[loop loop-finish count count-if count-if-not find find-if find-if-not
     position position-if position-if-not reduce every some notany notevery
     fill replace copy-seq subseq reverse nreverse sort stable-sort
     remove remove-if remove-if-not delete delete-if delete-if-not

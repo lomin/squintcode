@@ -158,6 +158,31 @@
     (is (= true (ucl/loop for v being the hash-values of (ucl/make-hash-table :initial-contents {1 10 2 20})
                           always (> v 5))))))
 
+(deftest parallel-for-conformance-test
+  (testing "for ... and ...: initialized and stepped in parallel"
+    (is (= 45 (ucl/loop for x = 1 then y and y = 2 then x repeat 3 sum (* 10 x) sum y)))
+    (is (= 103 (ucl/loop for i from 1 to 3 and j = 100 then i sum j)))
+    ;; the = clause's first value sees the group's counter, as SBCL and ECL (H67)
+    (is (= 1 (ucl/let ((i 20)) (ucl/loop for i from 1 to 3 and j = i then 0 sum j))))
+    (is (= 3 (ucl/let ((i 20)) (ucl/loop for i from 1 to 3 and j = 0 then i sum j)))))
+  (testing "an iterator's end test before the variables, the limits after (H67)"
+    (is (= [3 12] (ucl/loop for x across [1 2 3] and i from 10 to 11 finally (return [x i]))))
+    (is (= [3 12] (ucl/loop for i from 10 to 11 and x across [1 2 3] finally (return [x i]))))
+    (is (= [2 6] (ucl/loop for x across [1 2] and y across [5 6 7] finally (return [x y]))))
+    (is (= 0 (ucl/loop for x across [] and i from 0 count true)))))
+
+(deftest loop-finish-conformance-test
+  (testing "loop-finish ends the iteration; the epilogue runs"
+    (is (= 3 (ucl/loop for i from 1 to 5 do (when (== i 3) (ucl/loop-finish)) finally (return i))))
+    (is (= 6 (ucl/loop for i from 1 to 5 sum i do (when (== i 3) (ucl/loop-finish)))))
+    (is (= 3 (ucl/loop for i from 1 to 5 when (== i 3) do (ucl/loop-finish) end sum i)))
+    (is (= 7 (ucl/loop for x across [3 4 5] sum x into s do (when (> s 6) (ucl/loop-finish))
+                       finally (return s)))))
+  (testing "a nested loop's loop-finish ends that loop"
+    (is (= 6 (ucl/loop for i from 1 to 3
+                       sum (ucl/loop for j from 1 to 10 do (when (== j i) (ucl/loop-finish))
+                                     finally (return j)))))))
+
 (deftest simple-loop-conformance-test
   (testing "(loop form*) runs until return"
     (is (= 4 (ucl/let ((n 0)) (ucl/loop (ucl/incf n) (when (> n 3) (ucl/return n))))))))

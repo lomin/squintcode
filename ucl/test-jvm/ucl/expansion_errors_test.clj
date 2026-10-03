@@ -70,7 +70,8 @@
     (signals? #"a for clause after a main clause" (ucl/loop do (f) for x across [1]))
     (signals? #"unknown clause foo" (ucl/loop for x across [1] foo x))
     (signals? #"counting down needs a start" (ucl/loop for i downto 0 sum i))
-    (signals? #"a for name is bound twice" (ucl/loop for i below 3 for i below 4 sum i)))
+    (signals? #"a for or with name is bound twice" (ucl/loop for i below 3 for i below 4 sum i))
+    (signals? #"a for or with name is bound twice" (ucl/loop with i = 20 for i from 1 to 3 sum i)))
   (testing "one default accumulator, of one kind"
     (signals? #"sum/count and maximize/minimize accumulate into one value"
               (ucl/loop for x across [1] sum x maximize x))
@@ -81,16 +82,18 @@
     (signals? #"always, never and thereis decide the loop's value"
               (ucl/loop for x across [1] sum x always x)))
   (testing "not built yet (§13)"
-    (signals? #"loop-finish is not built yet" (ucl/loop for x across [1] loop-finish))
-    (signals? #"loop-finish is not built yet" (ucl/loop for x across [1] do (when x (loop-finish))))
+    (signals? #"loop-finish is a form: do \(loop-finish\)" (ucl/loop for x across [1] loop-finish))
+    (signals? #"loop-finish outside a ucl/loop" (ucl/loop-finish))
+    (signals? #"\(return-from loop-finish \.\.\.\) is inside \(fn \.\.\.\)"
+              (ucl/loop for x across [1] do (mapv (fn [y] (ucl/loop-finish)) [x])))
     (signals? #"package iteration needs packages, which ucl does not have \(D53\)"
               (ucl/loop for s being the symbols of p count s))
     (signals? #"for k being the hash-keys: expected in or of"
               (ucl/loop for k being the hash-keys h sum k))
     (signals? #"expected using \(hash-value var\)"
               (ucl/loop for k being the hash-keys of h using (hash-key v) sum k))
-    (signals? #"parallel stepping\) is not built yet"
-              (ucl/loop for x across [1] and y across [2] sum x))))
+    (signals? #"for x after a main clause|a for clause after a main clause"
+              (ucl/loop do (f) for x across [1] and y across [2]))))
 (deftest sequence-function-keys-test
   (testing "a key a sequence function does not take"
     (signals? #"count-if does not take :bad" (ucl/count-if odd? [1] :bad 1))

@@ -102,7 +102,8 @@ Rules:
   `for … from/below/to/by`, `for k being the hash-keys of h [using (hash-value v)]`,
   `sum`/`count`/`maximize`/`minimize` `[into v
   of-type T]`, `when`/`unless`/`else`, `while`/`until`/`repeat`, `always`/`never`/
-  `thereis`, `with`, `finally`; no list clauses), `(block name …)`,
+  `thereis`, `with`, `finally`, `for … and …`, `(ucl/loop-finish)`; no list
+  clauses), `(block name …)`,
   `(return-from name [v])`, `(return [v])` (`dotimes` is a block
   nil, `defun` one named after it; an exit compiles only in statement or return
   position), `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),

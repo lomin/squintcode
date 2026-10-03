@@ -33,9 +33,9 @@ See §4.2, D44–D52, §9.11, §9.13, I40–I50 and H70–H72.
 **`ucl/loop` and blocks** (2026-10-03, a fifth grilling session): Common
 Lisp's `LOOP` over vectors, numbers and hash tables, and its block model --
 `block`, `return-from`, `return` -- with every exit compiled statically.
-Blocks and `ucl/loop` are built (I23–I36), hash-table iteration included,
-but for `loop-finish` and parallel `for … and` (§13); §4.3, D53–D63, §9.12,
-§9.14, H59–H66.
+Blocks and `ucl/loop` are built, all of D53's scope -- hash-table iteration,
+`loop-finish` and parallel `for … and` included (I23–I38); §4.3, D53–D63,
+§9.12, §9.14, H59–H68.
 
 ```bash
 ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint, ClojureDart
@@ -437,7 +437,7 @@ the report counts each reason. Checking the query slice against the suite
 found four deviations, fixed by I45; the third slice one, fixed by I49. Three
 tests translate unfaithfully, and the translator names and skips them.
 
-### 4.3 `ucl/loop` and blocks (D53–D63) -- built, but `loop-finish` and `for … and` (§13)
+### 4.3 `ucl/loop` and blocks (D53–D63) -- built
 
 `ucl/loop` is Common Lisp's `LOOP` (CLHS 6.1) for what ucl has: vectors,
 numbers, hash tables. It exists to make a solution short without making it
@@ -1447,6 +1447,16 @@ Found while building `ucl/loop` (SBCL 2.2.9, ECL 21.2.1):
   the block and read after it: "Undefined name 'loop$1'". An exit can leave a
   loop so: `(ucl/loop (ucl/return :a))`. The block compiler writes such a loop
   as a `let`. Found by the ANSI suite's `sloop.1`.
+- **H67** — SBCL and ECL order a group of `for` clauses joined by `and`
+  (`sb-loop` expansion; conformance cases): the steps are parallel -- each
+  sees the old values -- but an `across` index is stepped and tested first,
+  every variable then assigned, and the arithmetic limits tested on the new
+  values; `for x across #(1 2 3) and i from 10 to 11` ends with `x` 3, `i`
+  12 in either order. The first values are not all parallel: a `=` clause's
+  first value sees the group's counters (`for i from 1 to 3 and j = i` starts
+  `j` at 1).
+- **H68** — A name bound twice by a loop's `with` and `for` clauses: SBCL
+  signals ("Duplicated variable"), ECL lets the later one win.
 
 Found by the native bulk-operation measurement (§9.13; Node 24.16.0, Dart 3.13.5):
 
@@ -1577,6 +1587,8 @@ Made while building v1, not in the grilling session; each is reversible.
 | I34 | `ucl/ansi/translate.clj loop` turns the ANSI test suite's LOOP files (`iteration/loop*.lsp`) into `test/ucl/ansi_loop_test.cljc`, conformance cases (D60), with `ucl/ansi/REPORT-loop.md` listing every skip: clause syntax passes as written (the type after `of-type`, a name after `named`/`into`/`using`), `return`/`return-from`/`block`/`setq` map to ucl's, `aref`/`elt`/`length` to `ucl/elt`/`ucl/length`; `suite-globals` gives the fixed tables `loop6.lsp` builds from lists as ucl tables. `nil` as a `for`/`with` variable binds a value nothing reads (CLHS 6.1.1.7) | the sequence functions' translator (I46) with a second file list: 79 of the 743 tests translate (65 before hash-table iteration), and all pass on the four hosts and round-trip through SBCL and ECL |
 | I35 | Hash-table iteration (D58) is one backend operation, `:hash-iter` -- `start` (an entry iterator: JS `Map.entries()`, the JVM's `entrySet().iterator()`, Dart's `entries.iterator`), `next` (the next entry or nil, a small helper on each host), `key`, `value` -- and a `ucl/loop` clause like `across`: the entry is a loop parameter, its key and value are read at the top of each iteration | the iterator is all that differs per host (D58); on Squint the kernel is `entries()`, `hash_next` and a null test, no IIFE, and Dart reaches no ClojureDart runtime |
 | I36 | ClojureScript keys a `js/Map` by a keyword's name behind ClojureScript's keyword marker `\uFDD0` (was the bare name), and `hash-unkey` decodes it when iterating | iteration must give `:a` back as on the other hosts; a plain string key is unchanged |
+| I37 | `(loop-finish)` is an exit (D55): ucl/loop rewrites each of its own -- not a nested loop's -- to `(return-from loop-finish <epilogue>)` from a block of that name around the Clojure loop, so the epilogue runs where every name it reads is bound; outside a loop it is a compile-time error | the block compiler (I25) already makes it static; SBCL and ECL agree on the values |
+| I38 | `for` clauses joined by `and` are a group, ordered as SBCL and ECL do (H67): stepped -- iterators' indexes and tests, then every variable in parallel through temporaries, then the limits -- and started -- counters, iterators, `=` first values, limits. A single clause keeps its code. A name bound twice across `with` and `for` is rejected (H68, D60) | the order shows only in `finally` and in a `=` clause's first value; conformance cases pin both |
 | I40 | D45 per operation (§9.13): JS `fill` is `.fill` (either container); JS `replace` and Dart `replace` copy natively when both vectors are typed (`set`/`setRange`, checked at run time), else loop; `subseq`/`copy-seq` are `.slice`/`.sublist`; `sort`/`stable-sort` expand to one shared bottom-up merge sort with the predicate inlined, except JS with `<` (or `#'<`) on a `fixnum-vector`/`sb53-vector` that is a typed array at run time, which calls the native sort; Dart `fill` and everything on the JVM expand to loops | the measurement: native wins only where it copies memory or sorts typed numbers without a comparator; a run-time `ArrayBuffer.isView` check because a declared `fixnum-vector` may be a plain `Array` (H70) |
 | I41 | A sequence function's registry entry applies only to a call through a namespace other than Clojure's own, with every argument: entries are keyed by bare name, and `(count v)` or `(reduce + xs)` in a `ucl/let` body is Clojure's. A curried form is a function value, bound, not tailed | the walker and D35 must not expand Clojure's namesakes; clients always use the alias (D25) |
 | I42 | A literal `fn`'s body is written into the loop with its continuation -- the `if` of a test, the `recur` of a fold -- pushed into the tail of its `let`s and `do`s, unless a name the body binds occurs in the continuation's code; then the body stays an expression | written as it is, an `if` test or a `recur` argument ending in `let` is an expression-position `let`: an IIFE per element on Squint (H22) |
@@ -1759,8 +1771,6 @@ backend selection by source root; mutable host collections only.
   unexpanded user macro. Deferred: kept simple until a solution shows an IIFE
   on a hot path, then designed once for both vocabularies.
 - **`ucl/loop` and blocks** (D53–D62):
-  - Not built yet: `loop-finish`, and parallel stepping (`for … and …`).
-    Each is rejected with a message saying so.
   - The ports (§9.14) are equal or faster on Dart; on V8 121 is +13% for its
     clause order, and 2762 +4–9%, near the run-to-run spread -- accepted
     (D63). No port iterates a table, so its step is unmeasured, and none
@@ -1773,7 +1783,7 @@ backend selection by source root; mutable host collections only.
     (I25). Exit from a statement, or test with `thereis`/`always`/`never`.
   - `across` waits for strings and characters in the contract.
   - Hash-table iteration order differs on the JVM (D58).
-  - The ANSI test suite's 743 LOOP tests (I34): 79 run as conformance cases.
+  - The ANSI test suite's 743 LOOP tests (I34): 82 run as conformance cases.
     The rest need lists (`collect`, `for … in`: about 400), are error or
     `macrolet` tests, or exit from a binding's init -- `with x = (return t)`,
     which D55 rejects; its message names the generated `let`, not the
