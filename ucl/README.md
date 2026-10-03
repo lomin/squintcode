@@ -13,7 +13,8 @@ in [GLOSSARY.md](./GLOSSARY.md).
 
 **ClojureDart** (2026-10-03, a third grilling session): a fourth host, for
 tests and for LeetCode's Dart submissions -- standalone Dart, no ClojureDart
-runtime (§3, §5, §7, §9.9, D38–D42, I14–I21, H39–H53).
+runtime, as fast as hand-written Dart (§3, §5, §7, §9.9, D38–D43, I14–I22,
+H39–H54).
 
 ```bash
 ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint, ClojureDart
@@ -26,7 +27,7 @@ decision is measured against, each decision and what decided it, the
 measurements behind them, what was rejected, and what was got wrong on the way.
 Decisions `D1`–`D28` are numbered after the first grilling session's question
 that settled them (a gap is a question folded into another); `D29`–`D37` come
-from the second, on variables; `D38`–`D42` from the third, on ClojureDart.
+from the second, on variables; `D38`–`D43` from the third, on ClojureDart.
 
 ---
 
@@ -736,12 +737,15 @@ difference to hand-written Dart removed at a time:
 | …each `IntCell` replaced by an `int` local | 1.98 | 4.39 |
 | …plus `nums` read as `List<int>` | 1.91 | 3.25 |
 | …plus `&&` for ClojureDart's `and` (H48) | **1.55** | **3.03** |
-| hand-written | 1.62–1.67 | 2.89–2.98 |
-| **ucl, `nums` declared `fixnum-vector` (D42)** | **1.93** | **3.15** |
+| hand-written | 1.60–1.67 | 2.89–3.02 |
+| ucl, `nums` declared `fixnum-vector` (D42) | 1.93–1.99 | 3.13–3.25 |
+| …with only `late final` declared `final` | 1.62 | 2.89 |
+| **ucl, built today: `fixnum-vector`, no `late` (I22)** | **1.69** | **2.97** |
 
 Cells cost nothing (the VM removes a non-escaping one). Element type costs
-≈25% AOT -- D42 removed it. ClojureDart's `and` in a loop test costs ≈18% JIT;
-it is recorded, not worked around (§13).
+≈25% AOT -- D42 removed it. The rest was not `and` but the `late` on the local
+ClojureDart forks it into (H54): dropped by the bundler, the ucl build
+measures as hand-written Dart.
 
 ## 10. Host facts
 
@@ -903,7 +907,8 @@ Found while adding ClojureDart (`247b3c2`, Dart 3.13.5):
 - **H47** — A ClojureDart vector is a Dart `List` (`[]`, `.length`, `is List`);
   a keyword literal is a canonical `const` compared with `==`.
 - **H48** — `(and a b)` in a test compiles to a `late final bool` temporary and
-  an `if`, not `&&`: ≈18% on the 2762 kernel under the JIT (§9.9).
+  an `if`, not `&&`. The cost is the `late` (H54), not the shape: without it,
+  the shape measures as `&&` (§9.9).
 - **H49** — The macro host reads with features `#{:cljd :cljd/clj-host :clj}`,
   the Dart side with `:cljd` only: `#?(:cljd/clj-host …)` is macro-host code.
   `clojure.string` through an alias does not resolve on the macro host.
@@ -923,6 +928,12 @@ Found while adding ClojureDart (`247b3c2`, Dart 3.13.5):
 - **H53** — tools.deps deprecates `:paths` outside the project directory, even
   through a symlink; ClojureDart's compile-error report drops the cause
   (`cljd-project/report.clj` prints the chain).
+- **H54** — ClojureDart declares a local bound to an `if`, `let` or `loop` in
+  expression position as `late final T x;` and assigns it in each branch
+  (`final-locus` in its compiler). `late` makes Dart check the assignment at
+  run time, which the JIT keeps in a hot loop: ≈18% on 2762 (§9.9). Declared
+  `T x;`, Dart's definite-assignment analysis proves it at compile time -- in
+  all seven solutions -- and refuses to compile what it cannot prove.
 
 ## 11. Decision log
 
@@ -971,7 +982,8 @@ was decided on reasoning, with the trade-offs on the table.
 | D39 | The bundler generates what LeetCode calls, untyped: `class Solution` (one method per function) and, per design problem, a class that runs the BOA constructor and delegates | evidence (H52, §9.9) |
 | D40 | A struct's methods live inside its Dart class, through ClojureDart's two passes | user judgement, evidence (H42) |
 | D41 | The prototype's contract changes ship to all hosts: define before use, `let*` passes a binding vector through, a typed `dotimes` counter | evidence (H40, H41) |
-| D42 | LeetCode's `int[]` input is declared `fixnum-vector`; `simple-vector` is for anything else; ClojureDart's `and` cost is recorded, not worked around | user judgement, evidence (§9.9) |
+| D42 | LeetCode's `int[]` input is declared `fixnum-vector`; `simple-vector` is for anything else | user judgement, evidence (§9.9) |
+| D43 | The bundler declares ClojureDart's forked locals without `late`, and `bb build` fails unless every submission analyzes clean; the fix is also proposed upstream | user judgement, evidence (H54, §9.9) |
 
 ### Implementation decisions (I1–I21)
 
@@ -1000,6 +1012,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I19 | `run-tests.sh` fails if the kernels' safety-0 Dart references `cljd.core` | D38 is structural, like I12 |
 | I20 | The `dotimes` counter is hinted through a `:types :local-hint` op: `int` on Dart, `number` on ClojureScript, nothing on Squint and the JVM | Clojure refuses a hint on a local bound to a primitive literal |
 | I21 | `princ-to-string` and `:element-type 'string` | fizzbuzz on Dart: `str` reaches the runtime (H50), and the result must be a `List<String>` |
+| I22 | `bb build` analyzes each submission with LeetCode's `ListNode`/`TreeNode` beside it; warnings (unnecessary casts) pass | D43; it also catches any bundler bug |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1073,8 +1086,11 @@ backend selection by source root; mutable host collections only.
   ClojureDart runtime, which a submission cannot carry.
 - **Hinting `simple-vector` as `List<int>` on Dart** (D42) — a vector of
   strings or nodes would fail the cast.
-- **Rewriting `and` for ClojureDart** (D42) — on LeetCode both builds beat
-  100%; `(. a "&&" b)` would also evaluate `b` eagerly if ClojureDart hoists it.
+- **Rewriting `and` for ClojureDart** (D43) — the cost was the `late`, not
+  `and`; and `(. a "&&" b)` would evaluate `b` eagerly if ClojureDart hoists it.
+- **Patching ClojureDart's compiler at build time** (D43) -- tested and
+  submitted code would be identical, but a third dependency on its internals,
+  changing everything it generates.
 
 ## 13. Open items
 
@@ -1107,8 +1123,9 @@ backend selection by source root; mutable host collections only.
   - The JVM fixtures accept only the all-slots constructor (`(new ListNode 1
     nil)`, not `(new ListNode 1)`).
 - **ClojureDart limits** (D38–D42):
-  - `and` in a loop test costs ≈18% under the JIT (H48, §9.9); invisible on
-    LeetCode. Revisit if a Dart submission leaves the top 5%.
+  - Tests run ClojureDart's output with `late`; submissions without (D43).
+    Proposed upstream; once ClojureDart declares such locals without `late`,
+    the bundler step goes.
   - A method must be defined in its struct's namespace (D40).
   - Methods depend on ClojureDart's two passes (H42) and `ListNode` on its
     resolver (H45): undocumented internals, pinned at `247b3c2`.
@@ -1193,6 +1210,7 @@ was a claim made without compiling or measuring first.
 | The first variables kernel of 2762 | Still had one IIFE: `(setf maxt (loop …))`. Found by the I12 check; fixed by I10. |
 | ClojureDart grilling: "with methods inside the class, a design-problem submission needs no wrapper" | The constructor still does: LeetCode calls `NumArray(nums)`, and the class's own constructor takes the slots. The wrapper delegates (D39). |
 | ClojureDart grilling: "the 2762 Dart build is 20–38% slower than hand-written -- a problem" | Locally, yes; on LeetCode both beat 100% (473 against 487 ms). Its Dart runtime is mostly the harness. |
+| "ClojureDart's `and` costs ≈18% under the JIT" (H48, recorded as an open item) | The `late` on the local it forks into did (H54); every `if` in expression position paid it. Measured by removing one difference at a time, then fixed (D43). |
 | The prototype's typed `dotimes` counter | Overloaded `:hint`'s parameter count with `:local`: the JVM backend would have thrown, and Clojure refuses a hint there anyway. Became `:local-hint` (I20) before it shipped. |
 
 The pattern is unchanged from `setf`: every serious error was an inference made

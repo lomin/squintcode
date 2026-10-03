@@ -183,8 +183,10 @@ outside a project).
 - **Submissions** (`bb build`): `out/cljd-build` at `-J-Ducl.safety=0`, then
   `bb/tasks/dart.clj` tree-shakes each solution's Dart: it fails on any
   reference into `cljd/core.dart`, leaves `ListNode`/`TreeNode` bare for
-  LeetCode's, and adds an untyped `class Solution` (one method per function)
-  or, for a design problem, a class named like the struct that wraps it.
+  LeetCode's, declares ClojureDart's forked locals without `late` (a run-time
+  check that costs ≈18% in hot loops), and adds an untyped `class Solution`
+  (one method per function) or, for a design problem, a class named like the
+  struct that wraps it. Every submission must then pass `dart analyze`.
 - Compile errors print their cause chain (`ucl/cljd-project/report.clj`);
   `DYNAMIC WARNING` marks dynamic member access -- expected in tests, a missing
   declaration in a solution.

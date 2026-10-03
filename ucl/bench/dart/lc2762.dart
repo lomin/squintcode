@@ -5,6 +5,7 @@
 //   typed          locals, plus nums read as List<int>
 //   and            typed, plus `&&` where ClojureDart emits a `late final bool` (H48)
 //   fixnum-vector  the build with nums declared fixnum-vector (D42)
+//   no-late        the build once the bundler declares forked locals without `late` (I22)
 //   hand           hand-written Dart
 // n = 10^5 values in 1..5. Run each variant in its own process:
 //   dart run lc2762.dart <variant>                       (JIT)
@@ -493,6 +494,103 @@ return d_typed_data.Int32List((n$1 as int), );
 
 
 
+
+dynamic v3_continuousSubarrays(dynamic nums$1, ){
+return v3_count_steady_stretches((nums$1 as List<int>), 2, );
+}
+
+
+dynamic v3_count_steady_stretches(dynamic nums$1, dynamic gap$1, ){
+final int n$1=(nums$1 as List<int>).length;
+final d_typed_data.Int32List maxq$1=v2rt_make_fixnum_vector(n$1, );
+final d_typed_data.Int32List minq$1=v2rt_make_fixnum_vector(n$1, );
+final v2rt_IntCell left$1=v2rt_IntCell(0, );
+final v2rt_IntCell maxh$1=v2rt_IntCell(0, );
+final v2rt_IntCell maxt$1=v2rt_IntCell(0, );
+final v2rt_IntCell minh$1=v2rt_IntCell(0, );
+final v2rt_IntCell mint$1=v2rt_IntCell(0, );
+final v2rt_IntCell total$1=v2rt_IntCell(0, );
+int r$1=0;
+do {
+if((r$1 < n$1)){
+final int x$1=((nums$1 as List<int>)[r$1]);
+do {
+final bool and$6958_$AUTO_$1=(minh$1.v < mint$1.v);
+bool $if_$1;
+if(and$6958_$AUTO_$1){
+$if_$1=((x$1 - ((nums$1 as List<int>)[(minq$1[minh$1.v])])) > (gap$1 as int));
+}else{
+$if_$1=and$6958_$AUTO_$1;
+}
+if($if_$1){
+left$1.v=(1 + (minq$1[minh$1.v]));
+minh$1.v=(minh$1.v + 1);
+continue;
+}else{
+}
+break;
+} while(true);
+do {
+final bool and$6958_$AUTO_$2=(maxh$1.v < maxt$1.v);
+bool $if_$2;
+if(and$6958_$AUTO_$2){
+$if_$2=((((nums$1 as List<int>)[(maxq$1[maxh$1.v])]) - x$1) > (gap$1 as int));
+}else{
+$if_$2=and$6958_$AUTO_$2;
+}
+if($if_$2){
+left$1.v=(1 + (maxq$1[maxh$1.v]));
+maxh$1.v=(maxh$1.v + 1);
+continue;
+}else{
+}
+break;
+} while(true);
+do {
+final bool and$6958_$AUTO_$3=(maxh$1.v < maxt$1.v);
+bool $if_$3;
+if(and$6958_$AUTO_$3){
+$if_$3=(((nums$1 as List<int>)[(maxq$1[(maxt$1.v - 1)])]) <= x$1);
+}else{
+$if_$3=and$6958_$AUTO_$3;
+}
+if($if_$3){
+maxt$1.v=(maxt$1.v - 1);
+continue;
+}else{
+}
+break;
+} while(true);
+do {
+final bool and$6958_$AUTO_$4=(minh$1.v < mint$1.v);
+bool $if_$4;
+if(and$6958_$AUTO_$4){
+$if_$4=(((nums$1 as List<int>)[(minq$1[(mint$1.v - 1)])]) >= x$1);
+}else{
+$if_$4=and$6958_$AUTO_$4;
+}
+if($if_$4){
+mint$1.v=(mint$1.v - 1);
+continue;
+}else{
+}
+break;
+} while(true);
+final int t10558$1=maxt$1.v;
+(maxq$1[t10558$1]=r$1);
+final int t10559$1=mint$1.v;
+(minq$1[t10559$1]=r$1);
+maxt$1.v=(maxt$1.v + 1);
+mint$1.v=(mint$1.v + 1);
+total$1.v=(total$1.v + ((r$1 - left$1.v) - -1));
+r$1=(1 + r$1);
+continue;
+}
+return total$1.v;
+} while(true);
+}
+
+
 int hand(List<int> nums) {
   final n = nums.length;
   final maxq = Int32List(n), minq = Int32List(n);
@@ -516,6 +614,7 @@ void main(List<String> args) {
     'ucl': (a) => squintcode_lc_2762_continuous_subarrays$continuousSubarrays(a) as int,
     'locals': (a) => loc_continuousSubarrays(a) as int,
     'hand': hand,
+    'no-late': (a) => v3_continuousSubarrays(a) as int,
     'fixnum-vector': (a) => v2_continuousSubarrays(a) as int,
     'and': (a) => and_continuousSubarrays(a) as int,
     'typed': (a) => typ_continuousSubarrays(a) as int,
