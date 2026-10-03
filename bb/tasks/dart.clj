@@ -14,7 +14,12 @@
      5. rename each kept definition <library>$<ident>, drop the dart:core
         prefix (an explicit `import \"dart:core\" as dc` would hide the implicit
         one from LeetCode's own code), keep other dart: imports;
-     6. add what LeetCode calls (D39): `class Solution`, one method per
+     6. declare a forked local `T x;`, not ClojureDart's `late final T x;`:
+        `late` costs a run-time check the JIT keeps in a hot loop (H54), and
+        Dart's definite-assignment analysis proves the same at compile time --
+        `bb build` analyzes every submission, so a declaration it cannot prove
+        fails the build;
+     7. add what LeetCode calls (D39): `class Solution`, one method per
         function, and for each struct whose constructor is named like it -- a
         design problem, such as NumArray -- a class of that name whose
         constructor runs the BOA constructor and whose methods delegate.
@@ -44,6 +49,13 @@
 
 (defn- resolve-rel [from-rel import-path]
   (-> (fs/path "/" from-rel) fs/parent (fs/path import-path) fs/normalize str (subs 1)))
+
+(defn- drop-late
+  "`late final T x;` -> `T x;`. ClojureDart declares a local bound to an `if`,
+   `let` or `loop` in expression position this way and assigns it in each
+   branch; without `late` the compiler, not the run time, checks that."
+  [body]
+  (str/replace body #"(?m)^late final ([^;=\n]+);$" "$1;"))
 
 (defn- class? [body] (re-find #"^(?:abstract )?class " (str/triml body)))
 
@@ -95,7 +107,8 @@
                                    (re-pattern (str "(?<![\\w$.])" (quote-re (str prefix "." r)) "(?![\\w$])"))
                                    (str/re-quote-replacement (str (library-name target) "$" r)))))))
                     (swap! kept assoc [rel ident]
-                           (rename-definition @body ident (str (library-name rel) "$" ident))))))]
+                           (drop-late
+                            (rename-definition @body ident (str (library-name rel) "$" ident)))))))]
     (doseq [r roots] (visit entry-rel r))
     {:imports (sort (for [[path prefix] @dart] (str "import \"" path "\" as " prefix ";")))
      :bodies  (vals @kept)}))

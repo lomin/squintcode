@@ -218,6 +218,33 @@
         (exit! (str "ERROR: " output ": " (ex-message e)))))
     (println (str "  " output " (" (fs/size output) " bytes)"))))
 
+(def ^:private leetcode-classes
+  "LeetCode's own Dart definitions, which it puts beside a submission."
+  {"ListNode" "class ListNode { int val; ListNode? next; ListNode([this.val = 0, this.next]); }"
+   "TreeNode" "class TreeNode { int val; TreeNode? left; TreeNode? right; TreeNode([this.val = 0, this.left, this.right]); }"})
+
+(defn- analyze-dart!
+  "Analyze every Dart submission as LeetCode compiles it -- with its ListNode
+   and TreeNode -- and fail on any error: the bundler drops ClojureDart's
+   `late`, and only Dart's compiler can prove that safe (ucl H54)."
+  [problems]
+  (let [dir "out/dart-check"]
+    (fs/delete-tree dir)
+    (fs/create-dirs dir)
+    (doseq [p problems
+            :let [src (slurp (str "out/" p ".dart"))]]
+      (spit (str dir "/" p ".dart")
+            (str src "\n" (str/join "\n" (for [[c d] leetcode-classes
+                                                 :when (re-find (re-pattern (str "\\b" c "\\b")) src)]
+                                             d)) "\n")))
+    ;; warnings (an unnecessary cast) are ClojureDart's style, not defects
+    (let [{:keys [exit out]} (shell {:continue true :out :string :err :string}
+                                    (str dart-sdk "/bin/dart") "analyze" "--no-fatal-warnings" dir)]
+      (when-not (zero? exit)
+        (println (str/join "\n" (filter #(str/includes? % "error -") (str/split-lines out))))
+        (exit! "ERROR: a Dart submission does not compile"))
+      (println "  every Dart submission analyzes without errors"))))
+
 (defn- problems []
   (map #(str/replace (fs/file-name %) #"\.cljc$" "") (source-files)))
 
@@ -226,14 +253,16 @@
     (exit! "Usage: bb build-one <problem>   e.g. bb build-one fizzbuzz"))
   (println (str "Building " problem " (safety 0)..."))
   (bundle-problem! (compile-for-submission!) problem)
-  (bundle-dart! (compile-dart-for-submission! [problem]) problem))
+  (bundle-dart! (compile-dart-for-submission! [problem]) problem)
+  (analyze-dart! [problem]))
 
 (defn build-all []
   (println "Building every problem (safety 0)...")
   (let [dir (compile-for-submission!)]
     (doseq [p (problems)] (bundle-problem! dir p)))
   (let [dir (compile-dart-for-submission! (problems))]
-    (doseq [p (problems)] (bundle-dart! dir p))))
+    (doseq [p (problems)] (bundle-dart! dir p))
+    (analyze-dart! (problems))))
 
 (defn clean []
   (doseq [d ["out" "cljs-test-runner-out" ".cljs_node_repl" ".cljsbuild" ".shadow-cljs"]]
