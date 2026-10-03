@@ -906,17 +906,21 @@
                                (fn [k mode] (list head bs (tseq body k mode)))))
 
                       (and (contains? #{"loop" "loop*"} n) (vector? (first args)))
-                      (let [[bs & body] args]
+                      (let [[bs & body] args
+                            ;; a loop its exits left without a recur is a let: ClojureDart
+                            ;; loses the value of a recur-less loop in expression position (H66)
+                            head (fn [b body-form]
+                                   (list (if (mentions? body-form #{'recur}) head 'let) b body-form))]
                         (check-bindings bs n)
                         (cond
-                          (= k :ret) (list head bs (tseq body :ret mode))
+                          (= k :ret) (head bs (tseq body :ret mode))
                           ;; a literal after the loop -- `nil`, `-1` -- joins its
                           ;; normal ends: nothing can shadow it or recur in it
                           (and (= mode :direct) (literal? k))
-                          (list head bs (tseq [(assign-tails (assoc backend :rebound :all) (list* 'do body)
-                                                             (fn [x] (if (exit-target x) x (seq-do x k))))]
-                                              :ret mode))
-                          (and (= mode :flag) (trivial? k)) (seq-do (list head bs (tseq body :ret :flag)) k)
+                          (head bs (tseq [(assign-tails (assoc backend :rebound :all) (list* 'do body)
+                                                        (fn [x] (if (exit-target x) x (seq-do x k))))]
+                                         :ret mode))
+                          (and (= mode :flag) (trivial? k)) (seq-do (head bs (tseq body :ret :flag)) k)
                           :else (guard form k mode)))
 
                       (and (contains? #{"let" "let*"} n) (seq? (first args)))
