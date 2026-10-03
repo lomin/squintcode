@@ -93,7 +93,8 @@ hosts — and the shared code **never branches on host**: no host list, no
 **Heuristics, in priority order:**
 
 1. **Performance.** Generated code must be as fast as hand-written host code.
-   LeetCode on Squint is the proving ground.
+   LeetCode is the proving ground: Squint's JavaScript and ClojureDart's Dart
+   submissions.
 2. **Shared logic.** Push as much logic as possible into `ucl.contract`. The
    split line is exactly where host-specific emission becomes unavoidable.
 3. **Common Lisp idiom.** Names, argument order and semantics follow ANSI Common
@@ -170,6 +171,9 @@ Source roots per host -- exactly one backend each:
   shaking drops them only if every top-level `def` has a literal value. A table
   of quoted lists compiles to `list(..)` calls and is kept (H31) -- so such
   tables are functions. `bb build` fails if a submission contains any of it.
+  A Dart submission holds, by construction, only the definitions the bundler
+  reaches from the solution; it fails on any reach into the ClojureDart
+  runtime (D38, D39).
 - **Backend selection is a source-root convention.** Every backend declares the
   same namespace, `ucl.api`; each target's build puts exactly one backend
   directory on its path. Two on one path: the first silently wins (H11). This is
@@ -266,11 +270,13 @@ assigning one is a compile-time error naming it (D31).
   fresh variable is declared, the init runs as a statement, and each of its
   return positions assigns that variable. `(ucl/setf x <loop>)` on a variable
   does the same (I10). So `(ucl/let ((j (loop …))) …)` has no IIFE on any host.
-- **Representation** (D30): Squint, a plain `let` assigned in place; ClojureScript
-  and the JVM, a one-field cell (ClojureScript cannot assign a local, H35). The
-  JVM cell is a primitive `long` when the variable is declared `fixnum` or
-  `(signed-byte 53)`, else an `Object` with a compile-time warning (D34). A cell
-  that does not escape costs nothing: V8 and the JIT remove it (§9.8).
+- **Representation** (D30): Squint, a plain `let` assigned in place; ClojureScript,
+  the JVM and ClojureDart, a one-field cell (ClojureScript and ClojureDart
+  cannot assign a local, H35, H39). The JVM cell is a primitive `long` when the
+  variable is declared `fixnum` or `(signed-byte 53)`, else an `Object` with a
+  compile-time warning (D34); ClojureDart's is an `int` cell (`IntCell`) when
+  so declared. A cell that does not escape costs nothing: V8, the JVM's JIT
+  and the Dart VM remove it (§9.8, §9.9).
 - **Checks** (D34): at safety ≥ 1 a store into a variable declared `fixnum` or
   `(signed-byte 53)` -- its init included -- signals when the value is outside
   the type.
@@ -519,6 +525,7 @@ What the checks are, per host:
 Submission builds (`bb build`, `bb build-one`) use 0; tests use the default.
 `ucl/run-tests.sh` compiles the suite at safety 0 as well and fails if any
 check survives (Squint), or if the kernels reach the ClojureDart runtime.
+`bb build` analyzes every Dart submission and fails on any error (D43).
 ClojureScript caches compiled namespaces, and changing the setting does not
 invalidate that cache — clean before switching (the `bb` tasks do).
 
@@ -1122,7 +1129,7 @@ backend selection by source root; mutable host collections only.
     the hot path; `bb build` reports it.
   - The JVM fixtures accept only the all-slots constructor (`(new ListNode 1
     nil)`, not `(new ListNode 1)`).
-- **ClojureDart limits** (D38–D42):
+- **ClojureDart limits** (D38–D43):
   - Tests run ClojureDart's output with `late`; submissions without (D43).
     Proposed upstream; once ClojureDart declares such locals without `late`,
     the bundler step goes.
@@ -1145,7 +1152,7 @@ backend selection by source root; mutable host collections only.
 
 ## 14. Validation: ClojureDart, a fourth host
 
-*Superseded by the backend (D38–D42): ClojureDart is now a full host. Kept as
+*Superseded by the backend (D38–D43): ClojureDart is now a full host. Kept as
 the record of the question the spike answered.*
 
 `prototypes/ucl-cljd/` is a spike answering one question: can this design
