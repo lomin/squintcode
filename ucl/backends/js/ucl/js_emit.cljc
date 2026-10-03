@@ -146,7 +146,8 @@
      :types {:hint (fn [t _]
                      (when (:tags? flavor)
                        (cond (#{:fixnum :sb53} t) 'number
-                             (and (vector? t) (= :vector (first t))) 'array)))}
+                             (and (vector? t) (= :vector (first t))) 'array)))
+             :local-hint (fn [t] (when (and (:tags? flavor) (#{:fixnum :sb53} t)) 'number))}
      :struct {:define (fn [model] (cons 'do (define-struct flavor model)))}
      :method {:define (fn [m] (define-method m))}}))
 
