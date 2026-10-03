@@ -1,7 +1,7 @@
 (ns ucl.api
   "ucl on ClojureScript, macro half (runs on the JVM while ClojureScript
    compiles). The emit map is ucl.js-emit's, in the ClojureScript flavor."
-  (:refer-clojure :exclude [make-array min max defstruct defmethod])
+  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes])
   (:require [cljs.env :as env]
             [ucl.contract :as contract]
             [ucl.js-emit :as js-emit]))
@@ -16,6 +16,7 @@
    :key-runtime   (fn [k] (list 'ucl.api/hash-key k))
    :vector-reads? true
    :check-arity?  true
+   :cells?        true
    :safety        (fn [_] (when env/*compiler*
                             (get-in @env/*compiler* [:options :ucl/safety])))})
 

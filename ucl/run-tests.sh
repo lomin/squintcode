@@ -25,9 +25,11 @@ echo "squint defmacro marker present"
 
 if want jvm; then
 hr "CLOJURE / JVM"
-clojure -Sdeps '{:paths ["shared" "backends/jvm" "testkit/jvm" "test"]}' -M -e "
-(require 'clojure.test $(for n in $NSES; do printf "'%s " "$n"; done))
-(let [r (apply clojure.test/run-tests '[$NSES])]
+# test-jvm/: tests that need to expand a form at run time (ucl's expansion errors)
+JVM_NSES="$NSES $(cd test-jvm && find . -name '*_test.clj' | sed -e 's|^\./||' -e 's|\.clj$||' -e 's|/|.|g' -e 's|_|-|g' | sort)"
+clojure -Sdeps '{:paths ["shared" "backends/jvm" "testkit/jvm" "test" "test-jvm"]}' -M -e "
+(require 'clojure.test $(for n in $JVM_NSES; do printf "'%s " "$n"; done))
+(let [r (apply clojure.test/run-tests '[$JVM_NSES])]
   (shutdown-agents)
   (System/exit (if (clojure.test/successful? r) 0 1)))"
 fi
@@ -67,7 +69,7 @@ squint_compile () {   # squint_compile <dir> <safety> <files...> -- every file i
 }
 
 SOURCES="shared/ucl/contract.cljc backends/js/ucl/js_emit.cljc backends/squint/ucl/api.cljc
-         testkit/squint/ucl/test.cljc testkit/squint/ucl/leetcode.cljc $(cd test && find . -name '*_test.cljc' | sed 's|^\./|test/|')"
+         testkit/squint/ucl/test.cljc testkit/squint/ucl/leetcode.cljc $(cd test && find . -name '*.cljc' | sed 's|^\./|test/|')"
 
 if want squint; then
 hr "SQUINT"
@@ -85,6 +87,12 @@ if grep -rqE 'elt_checked|elt_set_checked|check_number|push_checked' "$OUT/squin
   echo "safety 0 output still contains checks"; exit 1
 fi
 echo "no checks emitted at safety 0"
+# D29, D35: variables exist so that a loop's state needs no IIFE. The kernels are
+# LeetCode-shaped; their submission build must contain none.
+if grep -q '(() =>' "$OUT/squint0/js/ucl/kernels.mjs"; then
+  echo "ucl/kernels compiles to an IIFE at safety 0:"; grep -n -B2 -A2 '(() =>' "$OUT/squint0/js/ucl/kernels.mjs"; exit 1
+fi
+echo "no IIFE in the kernels at safety 0"
 fi
 
 hr "ALL HOSTS PASSED"

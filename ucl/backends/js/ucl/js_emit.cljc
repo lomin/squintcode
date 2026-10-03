@@ -44,6 +44,12 @@
 
 (defn- api [sym] (symbol "ucl.api" (name sym)))
 
+(defn- var-tag
+  "The ClojureScript :tag of a variable's read, from its declared type."
+  [t]
+  (cond (contains? #{:fixnum :sb53} t) 'number
+        (and (vector? t) (= :vector (first t))) 'array))
+
 (defn- make-vector [flavor n {:keys [element initial-element has-initial-element? adjustable?
                                      fill-pointer items contents check-contents?]}]
   (let [arr (:array-literal flavor)
@@ -112,7 +118,25 @@
             :read (fn [[o slot] _] (list (symbol (str ".-" slot)) o))
             :write-once? true
             :write (fn [[o slot] _ v] (list 'set! (list (symbol (str ".-" slot)) o) v))}
+     ;; A variable (D30). Squint assigns a `^:mutable` local: plain `let` and
+     ;; `x = v` in JavaScript. ClojureScript cannot assign a local, so the
+     ;; variable is a one-field deftype; V8 removes the allocation.
+     :var {:read-once? true
+           :read (fn [[x t] _]
+                   (if (:cells? flavor)
+                     (tag flavor (list '.-v x) (var-tag t))
+                     x))
+           :write-once? true
+           :write (fn [[x _] _ v]
+                    (if (:cells? flavor)
+                      (list 'set! (list '.-v x) v)
+                      (list 'set! x v)))
+           :bind (fn [x _ init _]
+                   (if (:cells? flavor)
+                     [x (list 'new (api 'Cell) init)]
+                     [(vary-meta x assoc :mutable true) init]))}
      :number {:check (fn [x] (list (api 'check-number) x))
+              :check-type (fn [t x] (list (api (if (= t :fixnum) 'check-fixnum 'check-sb53)) x))
               :min (fn [a b] (if (and (contract/trivial? a) (contract/trivial? b))
                                (list 'if (list '< a b) a b)
                                (list 'js/Math.min a b)))
@@ -215,6 +239,16 @@
 
      (defn ~'check-number [~'x]
        (if (number? ~'x) ~'x (~'fail (str "the value " (pr-str ~'x) " is not a number"))))
+
+     (defn ~'check-fixnum [~'x]
+       (if (and (js/Number.isInteger ~'x) (<= -2147483648 ~'x 2147483647))
+         ~'x
+         (~'fail (str "the value " (pr-str ~'x) " is not of type fixnum"))))
+
+     (defn ~'check-sb53 [~'x]
+       (if (js/Number.isSafeInteger ~'x)
+         ~'x
+         (~'fail (str "the value " (pr-str ~'x) " is not of type (signed-byte 53)"))))
 
      (defn ~'length-any [~'x]
        ~(if vector-reads?

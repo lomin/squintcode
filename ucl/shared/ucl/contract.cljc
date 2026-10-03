@@ -120,6 +120,25 @@
       [:struct spec]
       :else nil)))
 
+;; Variables declared fixnum or (signed-byte 53) are checked on every store at
+;; safety >= 1, as SBCL checks a declared type (D2, D34).
+
+(defn ^:macro-support integer-type? [t]
+  (contains? #{:fixnum :sb53} t))
+
+(defn ^:macro-support integer-in-type? [t x]
+  (and (integer? x)
+       (if (= t :fixnum)
+         (<= -2147483648 x 2147483647)
+         (<= -9007199254740991 x 9007199254740991))))
+
+(defn ^:macro-support check-value
+  "`form`, checked against the variable type `t` when the build asks for it."
+  [backend t form]
+  (if (and (pos? (safety backend)) (integer-type? t) (not (integer-in-type? t form)))
+    ((op backend :number :check-type) t form)
+    form))
+
 ;; ===========================================================================
 ;; Places (D6)
 ;; ===========================================================================
@@ -131,12 +150,15 @@
 (def ^:macro-support places
   {"elt"        {:kind :elt     :args [:runtime :runtime]}
    "gethash"    {:kind :gethash :args [:runtime :runtime] :optional [:runtime]}
-   "slot-value" {:kind :slot    :args [:runtime :slot]}})
+   "slot-value" {:kind :slot    :args [:runtime :slot]}
+   ;; A variable as a place. Never written by hand: the variable walker turns
+   ;; `(setf x v)` into `(setf (%var x type) v)` (D31).
+   "%var"       {:kind :var     :args [:static :static]}})
 
 (defn ^:macro-support place-spec [place]
   (when (symbol? place)
-    (fail! (str "setf of the variable `" place "`: Clojure locals are immutable."
-                " Rebind it with loop/recur.")
+    (fail! (str "setf of `" place "`: it is a local, not a variable. Only names bound by"
+                " ucl/let, ucl/let* or a ucl/defun or ucl/defmethod parameter can be assigned.")
            {:place place}))
   (let [accessor (when (seq? place) (first place))
         spec     (when (symbol? accessor) (get places (name accessor)))]
@@ -177,6 +199,9 @@
           (let [s (slot-name a place)]
             (recur (next ks) (next as) binds (conj refs s) (conj srcs s)))
 
+          (= k :static)
+          (recur (next ks) (next as) binds (conj refs a) (conj srcs a))
+
           (or (not bind?) (trivial? a))
           (recur (next ks) (next as) binds (conj refs a) (conj srcs a))
 
@@ -193,12 +218,24 @@
         [binds refs srcs] (plan-args kinds (rest place) place (not once?))]
     (wrap-let binds ((op backend kind :read) refs srcs))))
 
+(declare assign-tails compound? expand-simple-write mentions?)
+
 (defn ^:macro-support expand-write
-  "One `(setf place value)`. The backend's write form evaluates to the value."
+  "One `(setf place value)`. The backend's write form evaluates to the value.
+   A variable assigned a compound value -- a loop, let, if, ... -- takes it
+   by return-position assignment (D35): a variable's place has no subforms,
+   so nothing is reordered."
   [backend place value]
   (let [{:keys [kind kinds]} (place-spec place)
         once? (get-in backend [kind :write-once?])
-        [binds refs srcs] (plan-args kinds (rest place) place (not once?))
+        [binds refs srcs] (plan-args kinds (rest place) place (not once?))]
+    (if (and (= kind :var) (compound? value))
+      (assign-tails backend value
+                    (fn [x] ((op backend kind :write) refs srcs (check-value backend (second refs) x))))
+      (expand-simple-write backend kind once? binds refs srcs value))))
+
+(defn ^:macro-support expand-simple-write [backend kind once? binds refs srcs value]
+  (let [value (if (= kind :var) (check-value backend (second refs) value) value)
         [binds v] (if (or once? (trivial? value))
                     [binds value]
                     (let [g (gensym "v")] [(conj binds g value) g]))]
@@ -220,9 +257,13 @@
   (let [{:keys [kind kinds]} (place-spec place)
         [binds refs srcs] (plan-args kinds (rest place) place true)
         old   ((op backend kind :read) refs srcs)
-        old   (if (pos? (safety backend)) ((op backend :number :check) old) old)
+        ;; a variable declared fixnum or (signed-byte 53) holds a number by
+        ;; construction (D34); checking it would box its value on the JVM
+        typed? (and (= kind :var) (integer-type? (second refs)))
+        old   (if (and (pos? (safety backend)) (not typed?)) ((op backend :number :check) old) old)
         delta (if (some? delta-form) delta-form 1)
-        new   (list op-sym old delta)]
+        new   (list op-sym old delta)
+        new   (if (= kind :var) (check-value backend (second refs) new) new)]
     (if (get-in backend [kind :write-once?])
       (wrap-let binds ((op backend kind :write) refs srcs new))
       (let [v (gensym "v")]
@@ -417,11 +458,15 @@
               (if tag (vary-meta p assoc :tag tag) p)))
           params)))
 
+(declare with-assignable)
+
 (defn ^:macro-support expand-defun [backend fname lambda-list body]
   (let [{:keys [required]} (parse-lambda-list "defun" lambda-list #{})
         [doc decls body] (split-body body)
-        params (hint-params backend required (declared-types decls))]
-    (list* 'defn fname (concat (when doc [doc]) [params] body))))
+        types  (declared-types decls)
+        params (hint-params backend required types)]
+    (list* 'defn fname (concat (when doc [doc]) [params]
+                               (with-assignable backend required types body)))))
 
 ;; ===========================================================================
 ;; defstruct (D18)
@@ -499,8 +544,20 @@
     ((op backend :struct :define) model)))
 
 ;; ===========================================================================
-;; with-slots: a code walker that respects local shadowing
+;; The walker: with-slots and variables (D18, D29)
 ;; ===========================================================================
+;; One code walker rewrites the names a ucl form gives meaning to inside its
+;; body: with-slots' slot names and ucl/let's variables. Its env:
+;;   :subst     {name {:read (fn [name] form) :place (fn [name] place-form)}}
+;;   :shadowed  names rebound inside the body, which no longer refer to them
+;; A free reference becomes its read; a reference used as the place of
+;; setf/incf/decf becomes its place. Operator position is left alone: as with
+;; Common Lisp's symbol-macrolet, a slot named `next` does not capture
+;; `(next xs)`. Binding forms are recognized by name; a ucl/let (bindings in a
+;; list) is told apart from Clojure's let (a vector) by its bindings.
+;;
+;; The walker is eager (no lazy seqs): `assigned-vars` relies on its side
+;; effects having happened when it returns.
 
 (defn ^:macro-support binding-symbols
   "Every symbol a binding form introduces, destructuring included (conservative)."
@@ -516,89 +573,386 @@
                            form)
     :else []))
 
-(declare walk-slots)
+(defn ^:macro-support lmap
+  "An eager `map` that returns a list, the shape code is made of."
+  [f xs]
+  (apply list (mapv f xs)))
+
+(defn ^:macro-support head-name
+  "The name of a form's operator when it is a symbol, else nil."
+  [form]
+  (when (and (seq? form) (seq form) (symbol? (first form)))
+    (name (first form))))
+
+(defn ^:macro-support shadow [env syms]
+  (update env :shadowed into syms))
+
+(declare walk)
 
 (defn ^:macro-support walk-bindings
-  "Walk a let/loop binding vector; each init sees the names bound before it."
+  "Walk a Clojure binding vector; each init sees the names bound before it.
+   In `for`/`doseq`, :let is a nested binding vector and :when/:while an
+   expression."
   [env bindings]
   (loop [bs (partition 2 bindings) env env out []]
     (if (empty? bs)
       [env out]
       (let [[pat init] (first bs)]
-        (recur (rest bs)
-               (update env :shadowed into (binding-symbols pat))
-               (conj out pat (walk-slots env init)))))))
+        (cond
+          (= :let pat)
+          (let [[env' v] (walk-bindings env init)]
+            (recur (rest bs) env' (conj out pat v)))
+
+          (keyword? pat)
+          (recur (rest bs) env (conj out pat (walk env init)))
+
+          :else
+          (recur (rest bs) (shadow env (binding-symbols pat)) (conj out pat (walk env init))))))))
 
 (defn ^:macro-support walk-fn-tail
   "`([params] body...)` or `[params] body...` of a fn."
   [env tail]
   (let [[params & body] tail
-        env (update env :shadowed into (binding-symbols params))]
-    (cons params (map #(walk-slots env %) body))))
+        env (shadow env (binding-symbols params))]
+    (cons params (lmap #(walk env %) body))))
 
-(defn ^:macro-support modify-op? [head]
-  (and (symbol? head) (contains? #{"setf" "incf" "decf"} (name head))))
+(defn ^:macro-support walk-fn
+  "The arities of a `fn`, after its optional name."
+  [env more]
+  (if (vector? (first more))
+    (walk-fn-tail env more)
+    (lmap #(walk-fn-tail env %) more)))
 
-(defn ^:macro-support slot-ref? [env form]
+(defn ^:macro-support var-binding-name
+  "The variable of one ucl/let binding: `x`, `(x)` or `(x init)`."
+  [b]
+  (if (seq? b) (first b) b))
+
+(defn ^:macro-support walk-ucl-let
+  "A ucl/let or ucl/let* not yet expanded: each init sees the outer names
+   (ucl/let) or also those bound before it (ucl/let*); the body sees them all."
+  [env head bindings body]
+  (let [sequential? (= "let*" (name head))
+        [env' bs] (reduce (fn [[e out] b]
+                            (let [b' (if (and (seq? b) (next b))
+                                       (list (first b) (walk (if sequential? e env) (second b)))
+                                       b)]
+                              [(shadow e [(var-binding-name b)]) (conj out b')]))
+                          [env []] bindings)]
+    (list* head (apply list bs) (lmap #(walk env' %) body))))
+
+(defn ^:macro-support vector-binder? [n]
+  (contains? #{"let" "let*" "loop" "loop*" "binding" "doseq" "for" "dotimes"
+               "when-let" "if-let" "when-some" "if-some" "when-first" "with-open"} n))
+
+(defn ^:macro-support modify-op? [n]
+  (contains? #{"setf" "incf" "decf"} n))
+
+(defn ^:macro-support ref? [env form]
   (and (symbol? form)
-       (contains? (:slots env) form)
+       (contains? (:subst env) form)
        (not (contains? (:shadowed env) form))))
 
-(defn ^:macro-support walk-slots
-  "Replace each free reference to a slot name with its read, and each slot name
-   used as a place of setf/incf/decf with `(slot-value obj 'slot)`. Operator
-   position is left alone: as with Common Lisp's symbol-macrolet, a slot named
-   `next` does not capture `(next xs)`."
+(defn ^:macro-support walk-seq [env form]
+  (let [[head & args] form
+        n (head-name form)]
+    (cond
+      (contains? #{"quote" "declare"} n) form
+
+      (and (vector-binder? n) (vector? (first args)))
+      (let [[bindings & body] args
+            [env' bindings'] (walk-bindings env bindings)]
+        (list* head bindings' (lmap #(walk env' %) body)))
+
+      (and (contains? #{"let" "let*"} n) (seq? (first args)))
+      (walk-ucl-let env head (first args) (rest args))
+
+      (and (= "dotimes" n) (seq? (first args)))
+      (let [[[v cnt & result] & body] args
+            env' (shadow env [v])]
+        (list* head (list* v (walk env cnt) (lmap #(walk env' %) result))
+               (lmap #(walk env' %) body)))
+
+      (and (= "with-slots" n) (sequential? (first args)))
+      (let [[slots obj & body] args
+            env' (shadow env (map var-binding-name slots))]
+        (list* head slots (walk env obj) (lmap #(walk env' %) body)))
+
+      (contains? #{"fn" "fn*"} n)
+      (let [[fname & more] (if (symbol? (first args)) args (cons nil args))
+            env (if fname (shadow env [fname]) env)
+            tail (walk-fn env more)]
+        (if fname (list* head fname tail) (cons head tail)))
+
+      (= "letfn" n)
+      (let [[specs & body] args
+            env' (shadow env (map first specs))]
+        (list* head (mapv (fn [[f & more]] (cons f (walk-fn env' more))) specs)
+               (lmap #(walk env' %) body)))
+
+      (= "case" n)
+      (let [[e & clauses] args
+            cnt (count clauses)]
+        ;; test constants are not evaluated
+        (list* head (walk env e)
+               (apply list (map-indexed (fn [i c] (if (and (even? i) (< (inc i) cnt)) c (walk env c)))
+                                        clauses))))
+
+      (= "catch" n)
+      (let [[cls e & body] args]
+        (list* head cls e (lmap #(walk (shadow env [e]) %) body)))
+
+      (modify-op? n)
+      (cons head (apply list
+                        (map-indexed
+                         (fn [i a]
+                           (if (and (ref? env a) (if (= "setf" n) (even? i) (zero? i)))
+                             ((:place (get (:subst env) a)) a)
+                             (walk env a)))
+                         args)))
+
+      :else (cons (if (symbol? head) head (walk env head)) (lmap #(walk env %) args)))))
+
+(defn ^:macro-support walk
+  "Rewrite `form` per `env`; see above. Metadata on rebuilt forms is kept."
   [env form]
   (cond
-    (slot-ref? env form) ((:read env) form)
-
-    (seq? form)
-    (let [[head & args] form]
-      (cond
-        (= 'quote head) form
-
-        (contains? #{'let 'let* 'loop 'loop* 'binding} head)
-        (let [[bindings & body] args
-              [env' bindings'] (walk-bindings env bindings)]
-          (list* head bindings' (map #(walk-slots env' %) body)))
-
-        (contains? #{'fn 'fn*} head)
-        (let [[fname & more] (if (symbol? (first args)) args (cons nil args))
-              env  (if fname (update env :shadowed conj fname) env)
-              tail (if (vector? (first more))
-                     (walk-fn-tail env more)
-                     (map #(walk-fn-tail env %) more))]
-          (if fname (list* head fname tail) (cons head tail)))
-
-        (modify-op? head)
-        (cons head (map-indexed
-                    (fn [i a]
-                      (cond
-                        (and (even? i) (= "setf" (name head)) (slot-ref? env a)) ((:place env) a)
-                        (and (zero? i) (not= "setf" (name head)) (slot-ref? env a)) ((:place env) a)
-                        :else (walk-slots env a)))
-                    args))
-
-        :else (cons head (map #(walk-slots env %) args))))
-
-    (vector? form) (mapv #(walk-slots env %) form)
-    (map? form)    (into {} (map (fn [[k v]] [(walk-slots env k) (walk-slots env v)]) form))
-    (set? form)    (set (map #(walk-slots env %) form))
+    (ref? env form) ((:read (get (:subst env) form)) form)
+    (and (seq? form) (seq form)) (let [out (walk-seq env form)]
+                                   (if (meta form) (with-meta out (meta form)) out))
+    (vector? form) (let [out (mapv #(walk env %) form)]
+                     (if (meta form) (with-meta out (meta form)) out))
+    (map? form)    (into {} (map (fn [[k v]] [(walk env k) (walk env v)]) form))
+    (set? form)    (set (map #(walk env %) form))
     :else form))
 
 (defn ^:macro-support expand-with-slots [backend slots obj body]
   (when-not (or (seq? slots) (vector? slots))
     (fail! "with-slots needs a slot list, as in (with-slots (a b) obj ...)" {:slots slots}))
   (let [entries (map (fn [s] (if (seq? s) [(first s) (second s)] [s s])) slots)
-        by-var  (into {} entries)
         [binds o] (if (trivial? obj) [[] obj] (let [g (gensym "obj")] [[g obj] g]))
         read    (op backend :slot :read)
-        env     {:slots    (set (keys by-var))
-                 :shadowed #{}
-                 :read     (fn [v] (read [o (by-var v)] [obj (by-var v)]))
-                 :place    (fn [v] (list 'slot-value o (list 'quote (by-var v))))}]
-    (apply wrap-let binds (map #(walk-slots env %) body))))
+        env     {:subst    (into {} (map (fn [[v s]]
+                                           [v {:read  (fn [_] (read [o s] [obj s]))
+                                               :place (fn [_] (list 'slot-value o (list 'quote s)))}])
+                                         entries))
+                 :shadowed #{}}]
+    (apply wrap-let binds (lmap #(walk env %) body))))
+
+;; ===========================================================================
+;; Variables: ucl/let, ucl/let*, assignable parameters, ucl/dotimes (D29-D36)
+;; ===========================================================================
+;; A variable is a name ucl binds that setf/incf/decf can assign. The walker
+;; rewrites its reads into the backend's read and its uses as a place into
+;; `(%var name type)`, so setf reaches it through the place machinery.
+;;
+;; Return-position assignment: a compound init (a loop, let, do, if, ...) of a
+;; ucl/let is not bound as a value -- on Squint a loop or let in expression
+;; position is an IIFE, and on the JVM a loop there is wrapped in a fn.
+;; Instead a fresh variable is declared, the init runs as a statement, and
+;; every return position of the init assigns that variable.
+
+(defn ^:macro-support var-env
+  "The walker env making each of `vars` a variable of its declared type."
+  [backend vars types]
+  (let [read (op backend :var :read)]
+    {:subst (into {} (map (fn [v]
+                            (let [t (get types v)]
+                              [v {:read  (fn [_] (read [v t] [v t]))
+                                  :place (fn [_] (list '%var v t))}]))
+                          vars))
+     :shadowed #{}}))
+
+(defn ^:macro-support assigned-vars
+  "The names among `candidates` that `body` assigns with setf/incf/decf."
+  [candidates body]
+  (let [hits (atom #{})
+        env  {:subst (into {} (map (fn [v] [v {:read  (fn [s] s)
+                                                :place (fn [s] (swap! hits conj s) s)}])
+                                   candidates))
+              :shadowed #{}}]
+    (doseq [f body] (walk env f))
+    @hits))
+
+(defn ^:macro-support mentions?
+  "Does `form` contain any of the symbols `syms`?"
+  [form syms]
+  (cond (symbol? form) (contains? syms form)
+        (map? form)    (boolean (some #(mentions? % syms) (concat (keys form) (vals form))))
+        (coll? form)   (boolean (some #(mentions? % syms) form))
+        :else false))
+
+(defn ^:macro-support compound?
+  "An init that ucl/let runs as a statement rather than binding as a value."
+  [form]
+  (contains? #{"if" "if-not" "when" "when-not" "cond" "case" "do" "let" "let*"
+               "loop" "loop*" "dotimes" "with-slots"}
+             (head-name form)))
+
+(defn ^:macro-support always-true?
+  "A cond test that is always true, such as :else."
+  [form]
+  (or (keyword? form) (true? form)))
+
+(declare expand-dotimes)
+
+(defn ^:macro-support assign-tails
+  "`form` as a statement whose every return position calls `assign` on the
+   value it would have returned. `recur` stays a `recur`."
+  [backend form assign]
+  (let [tail      (fn [f] (assign-tails backend f assign))
+        n         (head-name form)
+        head      (when n (first form))
+        args      (when n (rest form))
+        body-tail (fn [forms] (if (seq forms)
+                                (concat (butlast forms) [(tail (last forms))])
+                                [(assign nil)]))]
+    (cond
+      (nil? n)          (assign form)
+      (= "recur" n)     form
+      (= "if" n)        (let [[c a b] args] (list 'if c (tail a) (tail b)))
+      (= "if-not" n)    (let [[c a b] args] (list 'if c (tail b) (tail a)))
+      (= "when" n)      (list 'if (first args) (tail (list* 'do (rest args))) (assign nil))
+      (= "when-not" n)  (list 'if (first args) (assign nil) (tail (list* 'do (rest args))))
+      (= "cond" n)      (if (empty? args)
+                          (assign nil)
+                          (let [[c e & more] args]
+                            (if (always-true? c)
+                              (tail e)
+                              (list 'if c (tail e) (tail (list* 'cond more))))))
+      (= "case" n)      (let [[e & clauses] args
+                              cnt (count clauses)]
+                          (list* head e (apply list (map-indexed
+                                                     (fn [i c] (if (and (even? i) (< (inc i) cnt)) c (tail c)))
+                                                     clauses))))
+      (= "do" n)        (list* 'do (body-tail args))
+
+      (and (contains? #{"let" "let*" "loop" "loop*"} n) (vector? (first args)))
+      (list* head (first args) (body-tail (rest args)))
+
+      (and (contains? #{"let" "let*"} n) (seq? (first args)))
+      (let [[decls body] (split-with declare-form? (rest args))]
+        (list* head (first args) (concat decls (body-tail body))))
+
+      (and (= "dotimes" n) (seq? (first args)))
+      (tail (expand-dotimes backend (first args) (rest args)))
+
+      (= "with-slots" n)
+      (list* head (first args) (second args) (body-tail (drop 2 args)))
+
+      :else (assign form))))
+
+(defn ^:macro-support parse-var-bindings
+  "ucl/let bindings -- `((x init) (y) z)` -- as [[var init] ...]."
+  [what bindings]
+  (when-not (seq? bindings)
+    (fail! (str what " takes a list of bindings, as in (" what " ((x 0) (y 1)) ...), not "
+                (pr-str bindings))
+           {:bindings bindings}))
+  (mapv (fn [b]
+          (cond
+            (symbol? b) [b nil]
+            (and (seq? b) (symbol? (first b)) (<= 1 (count b) 2)) [(first b) (second b)]
+            :else (fail! (str what ": malformed binding " (pr-str b)) {:binding b})))
+        bindings))
+
+(defn ^:macro-support placeholder
+  "The value a variable holds before its compound init assigns it."
+  [t]
+  (if (integer-type? t) 0 nil))
+
+(defn ^:macro-support expand-parallel
+  "ucl/let: bind `bs` ([[var init] ..]) in parallel, then run `body` with
+   them as variables. Inits run left to right and see only outer names."
+  [backend bs types body]
+  (let [names (mapv first bs)
+        bind  (op backend :var :bind)
+        read  (op backend :var :read)
+        write (op backend :var :write)
+        plan  (vec (map-indexed
+                    (fn [i [v init]]
+                      (cond
+                        (compound? init)
+                        {:v v :init init :step :compound :g (gensym (name v))}
+
+                        ;; bound to a temporary when the final binding would see
+                        ;; an earlier variable, or would run after a later
+                        ;; compound init's statement
+                        (and (not (literal? init))
+                             (or (mentions? init (set (take i names)))
+                                 (some (fn [[_ x]] (compound? x)) (drop (inc i) bs))))
+                        {:v v :init init :step :temp :g (gensym (name v))}
+
+                        :else {:v v :init init :step :direct}))
+                    bs))
+        final (vec (mapcat (fn [{:keys [v init step g]}]
+                             (let [t (get types v)]
+                               (bind v t (case step
+                                           :direct   (check-value backend t init)
+                                           :temp     (check-value backend t g)
+                                           :compound (read [g t] [g t]))
+                                     {})))
+                           plan))
+        env   (var-env backend names types)
+        inner (list* 'let final (lmap #(walk env %) body))]
+    (reduce (fn [inner {:keys [v init step g]}]
+              (let [t (get types v)]
+                (case step
+                  :direct inner
+                  :temp   (list 'let [g init] inner)
+                  :compound
+                  (list 'let (bind g t (placeholder t) {:internal? true})
+                        (assign-tails backend init
+                                      (fn [x] (write [g t] [g t] (check-value backend t x))))
+                        inner))))
+            inner
+            (reverse plan))))
+
+(defn ^:macro-support expand-let
+  "ucl/let (parallel) and ucl/let* (sequential)."
+  [backend sequential? bindings body]
+  (let [what (if sequential? "let*" "let")
+        bs (parse-var-bindings what bindings)
+        [decls body] (split-with declare-form? body)
+        types (declared-types decls)]
+    (doseq [[v init] bs]
+      (when (and (integer-type? (get types v)) (nil? init))
+        (fail! (str what ": the variable " v " is declared " (pr-str (get types v))
+                    " but starts as nil. Give it an initial value.")
+               {:var v})))
+    (if sequential?
+      (reduce (fn [inner b] (expand-parallel backend [b] types [inner]))
+              (if (next body) (list* 'do body) (first body))
+              (reverse bs))
+      (expand-parallel backend bs types body))))
+
+(defn ^:macro-support with-assignable
+  "`body`, with every parameter among `params` that it assigns made a variable."
+  [backend params types body]
+  (let [assigned (assigned-vars params body)]
+    (if (empty? assigned)
+      body
+      [(expand-parallel backend (mapv (fn [p] [p p]) (filter #(contains? assigned %) params))
+                        types body)])))
+
+(defn ^:macro-support expand-dotimes
+  "(dotimes (var count [result]) body...): var runs from 0 below count, which
+   is evaluated once; result is evaluated with var bound to count."
+  [backend spec body]
+  (when-not (and (seq? spec) (symbol? (first spec)) (<= 2 (count spec) 3))
+    (fail! (str "dotimes takes (dotimes (var count [result]) body...), not " (pr-str spec))
+           {:spec spec}))
+  (let [[v n result] spec
+        [decls body] (split-with declare-form? body)
+        _ (declared-types decls)
+        [binds lim] (if (trivial? n) [[] n] (let [g (gensym "n")] [[g n] g]))]
+    (wrap-let binds
+              (list 'loop [v 0]
+                    (list 'if (list '< v lim)
+                          (list* 'do (concat body [(list 'recur (list 'inc v))]))
+                          (cond (nil? result)                 nil
+                                (mentions? result #{v})       (list 'let [v lim] result)
+                                :else                         result))))))
 
 ;; ===========================================================================
 ;; defmethod (D18): single static dispatch on the first parameter
@@ -613,9 +967,11 @@
     (let [{:keys [required]} (parse-lambda-list (str "defmethod " mname) (if (some? more) more ()) #{})
           [doc decls body] (split-body body)
           [self struct] recv
-          params (hint-params backend required (declared-types decls))]
+          types  (declared-types decls)
+          params (hint-params backend required types)]
       ((op backend :method :define)
-       {:name mname :self self :struct struct :params params :doc doc :body body}))))
+       {:name mname :self self :struct struct :params params :doc doc
+        :body (with-assignable backend required types body)}))))
 
 ;; ===========================================================================
 ;; defapi / defruntime: a backend's whole API surface (D26)
@@ -630,7 +986,7 @@
 (def ^:macro-support api-names
   '[elt length vector-push-extend make-array
     gethash make-hash-table slot-value
-    setf incf decf
+    setf incf decf let let* dotimes
     defun defstruct defmethod with-slots])
 
 (defmacro defapi
@@ -692,6 +1048,20 @@
         "(defmethod name ((self Struct) params...) [doc] (declare ...) body...)"
         [~'mname ~'lambda-list & ~'body]
         (~'contract/expand-defmethod ~emit-form ~'mname ~'lambda-list ~'body))
+      (defmacro ~'let
+        "(let ((var init)...) (declare ...) body...) -- bind in parallel; the
+         variables can be assigned with setf, incf and decf."
+        [~'bindings & ~'body]
+        (~'contract/expand-let ~emit-form false ~'bindings ~'body))
+      (defmacro ~'let*
+        "(let* ((var init)...) (declare ...) body...) -- bind in order; the
+         variables can be assigned with setf, incf and decf."
+        [~'bindings & ~'body]
+        (~'contract/expand-let ~emit-form true ~'bindings ~'body))
+      (defmacro ~'dotimes
+        "(dotimes (var count [result]) (declare ...) body...)"
+        [~'spec & ~'body]
+        (~'contract/expand-dotimes ~emit-form ~'spec ~'body))
       (defmacro ~'with-slots
         "(with-slots (slot...) object body...)"
         [~'slots ~'object & ~'body]

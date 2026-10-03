@@ -1,4 +1,4 @@
-{;; ucl's definers take Common Lisp lambda lists, which clj-kondo cannot
+{;; ucl's definers and binders take Common Lisp lambda and binding lists, which clj-kondo cannot
  ;; analyze; LeetCode's ListNode/TreeNode are globals there (ucl/README.md §7).
  :lint-as {}
  :linters {:unused-binding {:level :off}
@@ -6,4 +6,7 @@
                                          (ucl.api/defun)
                                          (ucl.api/defmethod)
                                          (ucl.api/defstruct)
-                                         (ucl.api/with-slots)]}}}
+                                         (ucl.api/with-slots)
+                                         (ucl.api/let)
+                                         (ucl.api/let*)
+                                         (ucl.api/dotimes)]}}}
