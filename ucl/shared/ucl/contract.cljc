@@ -166,7 +166,7 @@
   (let [accessor (when (seq? place) (first place))
         spec     (when (symbol? accessor) (get places (name accessor)))]
     (when-not spec
-      (fail! (str "`" (pr-str place) "` is not a place. Places: elt, gethash, slot-value.")
+      (fail! (str "`" (pr-str place) "` is not a place. Places: elt, gethash, slot-value, subseq.")
              {:place place}))
     (let [n    (count (rest place))
           need (count (:args spec))
@@ -1285,11 +1285,8 @@
                     (let [g (gensym "v")] [(conj binds g value) g]))]
     (wrap-let binds ((op backend kind :write) refs srcs v))))
 
-(defn ^:macro-support expand-write
-  "One `(setf place value)`. The backend's write form evaluates to the value.
-   A variable assigned a compound value -- a loop, let, if, ... -- takes it
-   by return-position assignment (D35): a variable's place has no subforms,
-   so nothing is reordered."
+(defn ^:macro-support expand-place-write
+  "One `(setf place value)` of a backend's place."
   [backend place value]
   (let [{:keys [kind kinds]} (place-spec place)
         once? (get-in backend [kind :write-once?])
@@ -1298,6 +1295,32 @@
       (assign-tails backend value
                     (fn [x] ((op backend kind :write) refs srcs (check-value backend (second refs) x))))
       (expand-simple-write backend kind once? binds refs srcs value))))
+
+(defn ^:macro-support expand-setf-subseq
+  "`(setf (subseq v start [end]) new)`: `replace` (CLHS subseq), arguments
+   evaluated left to right, the new sequence the value."
+  [place value]
+  (when-not (<= 3 (count place) 4)
+    (fail! (str "`subseq` as a place takes 2 or 3 arguments: " (pr-str place)) {:place place}))
+  (let [[_ & args] place
+        [binds [v s e n]] (reduce (fn [[binds refs] a]
+                                    (if (trivial? a)
+                                      [binds (conj refs a)]
+                                      (let [g (gensym "t")] [(conj binds g a) (conj refs g)])))
+                                  [[] []] (concat args (when (= 3 (count place)) [nil]) [value]))]
+    (wrap-let binds
+              (list* (symbol "ucl.api" "replace") v n :start1 s (when (= 4 (count place)) [:end1 e]))
+              n)))
+
+(defn ^:macro-support expand-write
+  "One `(setf place value)`. The backend's write form evaluates to the value.
+   A variable assigned a compound value -- a loop, let, if, ... -- takes it
+   by return-position assignment (D35): a variable's place has no subforms,
+   so nothing is reordered."
+  [backend place value]
+  (if (and (seq? place) (named? (first place) "subseq"))
+    (expand-setf-subseq place value)
+    (expand-place-write backend place value)))
 
 (defn ^:macro-support expand-setf
   "`(setf p1 v1 p2 v2 ...)`: assign left to right, return the last value."
@@ -1345,7 +1368,9 @@
     position position-if position-if-not reduce every some notany notevery
     fill replace copy-seq subseq reverse nreverse sort stable-sort
     remove remove-if remove-if-not delete delete-if delete-if-not
-    substitute substitute-if substitute-if-not nsubstitute nsubstitute-if nsubstitute-if-not])
+    substitute substitute-if substitute-if-not nsubstitute nsubstitute-if nsubstitute-if-not
+    remove-duplicates delete-duplicates mismatch search
+    make-sequence map map-into concatenate merge])
 
 (defn ^:macro-support expand-vocabulary
   "A vocabulary macro's expansion: its name's registry entry, called on the

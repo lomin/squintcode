@@ -162,3 +162,34 @@
     (ucl/loop for x across xs do (ucl/incf (ucl/gethash x freq 0)))
     (ucl/loop for n being the hash-values of freq
               sum (quot (* n (- n 1)) 2) of-type fixnum)))
+(ucl/defun common-prefix (a b)
+  "mismatch: one loop of two counters."
+  (declare (type fixnum-vector a b))
+  (ucl/let ((m (ucl/mismatch a b)))
+    (if (nil? m) (ucl/length a) m)))
+
+(ucl/defun find-run (nums k)
+  "search with a literal fn test against a run of k: the needle is a fresh vector."
+  (declare (type fixnum-vector nums) (type fixnum k))
+  (ucl/let ((needle (ucl/make-array 3 :element-type 'fixnum :initial-element k)))
+    (ucl/search needle nums :test (fn [a b] (== a b)) :from-end true)))
+
+(ucl/defun distinct-values (nums)
+  "remove-duplicates under eql: one pass with a hash table, first occurrences kept."
+  (declare (type fixnum-vector nums))
+  (ucl/remove-duplicates nums :from-end true))
+
+(ucl/defun squares (nums)
+  "map with a typed result: an Int32Array, the fn inlined."
+  (declare (type fixnum-vector nums))
+  (ucl/map '(vector fixnum) (fn [x] (* x x)) nums))
+
+(ucl/defun joined (a b)
+  "concatenate: one copy per sequence."
+  (declare (type fixnum-vector a b))
+  (ucl/concatenate 'fixnum-vector a b))
+
+(ucl/defun merged (a b)
+  "merge of two sorted vectors with <."
+  (declare (type fixnum-vector a b))
+  (ucl/merge 'fixnum-vector a b <))

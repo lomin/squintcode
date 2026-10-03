@@ -110,7 +110,18 @@
    "substitute-if-not"  {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}
    "nsubstitute"        {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :test :test-not :count}}
    "nsubstitute-if"     {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}
-   "nsubstitute-if-not" {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}})
+   "nsubstitute-if-not" {:nreq 3 :seq-pos 2 :new true :keys #{:from-end :start :end :key :count}}
+   "remove-duplicates"  {:nreq 1 :seq-pos 0 :keys #{:from-end :test :test-not :start :end :key}}
+   "delete-duplicates"  {:nreq 1 :seq-pos 0 :keys #{:from-end :test :test-not :start :end :key}}
+   ;; `:rest` -- &rest sequences, no curried form (D50); `:no-curry` -- no
+   ;; sequence to omit
+   "make-sequence"      {:nreq 2 :no-curry true :keys #{:initial-element}}
+   "map"                {:nreq 3 :rest true}
+   "map-into"           {:nreq 2 :rest true}
+   "concatenate"        {:nreq 1 :rest true}
+   "merge"              {:nreq 4 :seq-pos 2 :keys #{:key}}
+   "mismatch"           {:nreq 2 :keys #{:from-end :test :test-not :key :start1 :start2 :end1 :end2}}
+   "search"             {:nreq 2 :keys #{:from-end :test :test-not :key :start1 :start2 :end1 :end2}}})
 
 (defn ^:macro-support call-shape
   "`:full`, `:curried` (every argument but the sequence), or nil."
@@ -119,6 +130,7 @@
         o (or (:nopt spec) 0)
         c (count args)]
     (cond (:rest spec)                               (when (>= c n) :full)
+          (:no-curry spec)                           (when (and (>= c n) (keyword-tail? (drop n args))) :full)
           ;; optional positionals and no keywords: only one argument short
           ;; is curried, so (subseq v 2) is a call and (subseq 2) a function
           (pos? o)                                   (cond (<= n c (+ n o)) :full
@@ -152,6 +164,13 @@
     ("copy-seq" "reverse" "nreverse") (str "(" fname " sequence)")
     "subseq"                    "(subseq sequence start &optional end)"
     ("sort" "stable-sort")      (str "(" fname " sequence predicate &key key)")
+    ("remove-duplicates" "delete-duplicates") (str "(" fname " sequence &key from-end test test-not start end key)")
+    "make-sequence"             "(make-sequence result-type size &key initial-element)"
+    "map"                       "(map result-type function sequence &rest sequences)"
+    "map-into"                  "(map-into result-sequence function &rest sequences)"
+    "concatenate"               "(concatenate result-type &rest sequences)"
+    "merge"                     "(merge result-type sequence-1 sequence-2 predicate &key key)"
+    ("mismatch" "search")       (str "(" fname " sequence-1 sequence-2 &key from-end test test-not key start1 start2 end1 end2)")
     (str "(" fname " predicate sequence &key from-end start end key)")))
 
 (defn ^:macro-support parse-keys
@@ -272,16 +291,22 @@
   [key-spec e k]
   (apply-fn (or key-spec {:kind :identity}) [e] k))
 
-(defn ^:macro-support item-test
-  "The continuation-passing test of `item` against a key value: `:test`,
-   `:test-not` or `eql` (D52)."
-  [backend fname test-spec test-not-spec item form]
+(defn ^:macro-support pair-test
+  "The continuation-passing test of two key values: `:test`, `:test-not` or
+   `eql` (D52)."
+  [backend fname test-spec test-not-spec form]
   (when (and test-spec test-not-spec)
     (contract/fail! (str fname " takes :test or :test-not, not both (CLHS 17.2.1)")
                     {:form form}))
-  (cond test-spec     (fn [kv k] (apply-fn test-spec [item kv] k))
-        test-not-spec (fn [kv k] (apply-fn test-not-spec [item kv] (fn [t] (k (list 'not t)))))
-        :else         (fn [kv k] (k ((contract/op backend :seqfn :eql) item kv)))))
+  (cond test-spec     (fn [x y k] (apply-fn test-spec [x y] k))
+        test-not-spec (fn [x y k] (apply-fn test-not-spec [x y] (fn [t] (k (list 'not t)))))
+        :else         (fn [x y k] (k ((contract/op backend :seqfn :eql) x y)))))
+
+(defn ^:macro-support item-test
+  "The test of `item` against a key value."
+  [backend fname test-spec test-not-spec item form]
+  (let [t (pair-test backend fname test-spec test-not-spec form)]
+    (fn [kv k] (t item kv k))))
 
 ;; ===========================================================================
 ;; Index loops
@@ -771,6 +796,28 @@
           ;; e bounds the number changed: at most e - s elements are
           :else       (bind st (list 'if (list 'nil? c) e c) "limit"))))
 
+(defn ^:macro-support compacted
+  "The result once the kept elements of [s, e) are compacted in `dst`, to
+   start at s (`downward` false) or to end at e (`downward` true), `w` being
+   the end or the start of them: the untouched head and tail join them, in a
+   fresh vector only when something went."
+  [backend {:keys [dst v s e n no-head? no-tail?]} downward w]
+  (if downward
+    ;; [0, s) moves up to end at w; the result starts there
+    (let [from (if no-head? w (list '- w s))]
+      (list 'if (list '== w s) dst
+            (if no-head?
+              (subseq-form backend dst from n)
+              (list 'do (copy-range backend dst v from 0 s true)
+                    (subseq-form backend dst from n)))))
+    ;; [e, n) moves down to start at w
+    (let [tail (list '- n e)]
+      (list 'if (list '== w e) dst
+            (if no-tail?
+              (subseq-form backend dst 0 w)
+              (list 'do (copy-range backend dst v w e tail false)
+                    (subseq-form backend dst 0 (list '+ w tail))))))))
+
 (defn ^:macro-support expand-remove [backend form]
   (let [fname     (name (first form))
         in-place? (.startsWith ^String fname "delete")
@@ -786,7 +833,6 @@
         st        (if in-place? st (conj st dst (subseq-form backend v 0 n)))
         w         (counter backend "w")
         r         (counter backend "r")
-        tail      (list '- n e)
         build
         (fn [fe]
           (index-loop
@@ -801,20 +847,7 @@
                    tested (apply-key key el (fn [kv] (test kv (fn [t] (list 'if t drop keep)))))]
                (list 'let [el (list (api 'elt) v i)]
                      (if limit (list 'if (list '< r limit) tested keep) tested))))
-           (if fe
-             ;; [0, s) moves up to end at w; the result starts there
-             (let [from (if no-head? w (list '- w s))]
-               (list 'if (list '== w s) dst
-                     (if no-head?
-                       (subseq-form backend dst from n)
-                       (list 'do (copy-range backend dst v from 0 s true)
-                             (subseq-form backend dst from n)))))
-             ;; [e, n) moves down to start at w
-             (list 'if (list '== w e) dst
-                   (if no-tail?
-                     (subseq-form backend dst 0 w)
-                     (list 'do (copy-range backend dst v w e tail false)
-                           (subseq-form backend dst 0 (list '+ w tail))))))))]
+           (compacted backend {:dst dst :v v :s s :e e :n n :no-head? no-head? :no-tail? no-tail?} fe w)))]
     (finish st (both-directions (:from-end p) build))))
 
 (defn ^:macro-support expand-substitute [backend form]
@@ -842,6 +875,292 @@
                (if limit (list 'if (list '< r limit) step dst) step)))
            dst))]
     (finish st (both-directions (:from-end p) build))))
+
+;; ===========================================================================
+;; remove-duplicates, delete-duplicates
+;; ===========================================================================
+;; Of two matching elements the earlier goes, or with `:from-end` the later
+;; (CLHS remove-duplicates). Under the default test, eql, a hash table of the
+;; keys seen makes it one pass -- ucl's own, whose key emitter gives eql on
+;; every host (§6) -- from the end, so the first key seen is the one kept.
+;; Under any other test each element is compared with the ones after it (or
+;; before it), in one loop of two counters. Either way the kept elements
+;; are compacted as `remove` compacts them, in the direction that never
+;; overwrites an element still to be read.
+
+(defn ^:macro-support expand-remove-duplicates [backend form]
+  (let [fname     (name (first form))
+        in-place? (.startsWith ^String fname "delete")
+        [_ sq & kvs] form
+        st        (binder)
+        [st v]    (bind st sq "v")
+        {:keys [order]} (parse-keys fname (get (specs) fname) kvs form)
+        [st kf]   (bind-keys st order #{:key :test :test-not})
+        [st s e]  (bounds st v kf)
+        [st s]    (bind st s "s")
+        [st e]    (bind st e "e")
+        st        (check-bounds backend st v s e)
+        test      (pair-test backend fname (:test kf) (:test-not kf) form)
+        hash?     (not (or (contains? kf :test) (contains? kf :test-not)))
+        no-tail?  (nil? (get kf :end))
+        no-head?  (= 0 s)
+        [st n]    (if no-tail? [st e] (bind st (list (api 'length) v) "n"))
+        dst       (if in-place? v (gensym "dst"))
+        st        (if in-place? st (conj st dst (subseq-form backend v 0 n)))
+        seen      (gensym "seen")
+        st        (if hash? (conj st seen (list (api 'make-hash-table))) st)
+        i (counter backend "i") j (counter backend "j") w (counter backend "w")
+        el (gensym "el") o (gensym "o")
+        key       (:key kf)
+        res       {:dst dst :v v :s s :e e :n n :no-head? no-head? :no-tail? no-tail?}
+        build
+        (fn [fe]
+          ;; the direction of the compaction: the kept element must be read
+          ;; before anything is written over it
+          (let [down? (if hash? (not fe) fe)
+                at    (if down? (list 'dec w) w)
+                w'    (if down? (list 'dec w) (list 'inc w))
+                i0    (if down? (list 'dec e) s)
+                i'    (if down? (list 'dec i) (list 'inc i))
+                more? (if down? (list '>= i s) (list '< i e))
+                ;; the nested scan: after i going up, before i going down
+                j0    (if down? s (list 'inc i))
+                j0'   (if down? s (list '+ i 2))
+                exit  (compacted backend res down? w)]
+            (if hash?
+              (list 'loop [i i0 w (if down? e s)]
+                    (list 'if more?
+                          (list 'let [el (list (api 'elt) v i)]
+                                (apply-key key el
+                                           (fn [kv]
+                                             (list 'if (list 'nil? (list (api 'gethash) kv seen))
+                                                   (list 'do
+                                                         (list (api 'setf) (list (api 'gethash) kv seen) true)
+                                                         (store dst at el)
+                                                         (list 'recur i' w'))
+                                                   (list 'recur i' w)))))
+                          exit))
+              (list 'loop [i i0 j j0 w (if down? e s)]
+                    (list 'if more?
+                          (list 'let [el (list (api 'elt) v i)]
+                                (list 'if (if down? (list '< j i) (list '< j e))
+                                      (list 'let [o (list (api 'elt) v j)]
+                                            ;; the earlier element first
+                                            (let [[x y] (if down? [o el] [el o])]
+                                              (apply-key key x
+                                                         (fn [kx] (apply-key key y
+                                                                             (fn [ky] (test kx ky
+                                                                                            (fn [t] (list 'if t
+                                                                                                          (list 'recur i' j0' w)
+                                                                                                          (list 'recur i (list 'inc j) w))))))))))
+                                      (list 'do (store dst at el) (list 'recur i' j0' w'))))
+                          exit)))))]
+    (finish st (both-directions (get kf :from-end) build))))
+
+;; ===========================================================================
+;; make-sequence, map, map-into, concatenate, merge
+;; ===========================================================================
+;; A function given a result type makes a vector of that type: `'vector`
+;; (`simple-vector`) a general one, `'(vector fixnum)` (`fixnum-vector`) or
+;; `'(vector (signed-byte 53))` (`sb53-vector`) a typed one. The type is
+;; decided at expansion, so it must be quoted; ucl has no lists.
+
+(defn ^:macro-support result-element
+  "The element type a result type gives a fresh vector, as make-array's
+   :element-type takes it; :none for map's nil (no result)."
+  [fname rt form]
+  (when-not (or (nil? rt) (and (seq? rt) (= 'quote (first rt))))
+    (contract/fail! (str fname ": the result type must be quoted, as in 'vector or '(vector fixnum): "
+                         (pr-str rt) " -- " (usage fname))
+                    {:form form}))
+  (let [spec (when rt (second rt))
+        spec (if (symbol? spec) (contract/expand-type-abbreviation spec) spec)]
+    (cond (nil? spec) :none
+          (contains? #{'vector 'simple-vector} spec) 't
+          (and (seq? spec) (contains? #{'vector 'simple-array} (first spec)) (next spec))
+          (let [e (second spec)] (if (= '* e) 't e))
+          :else (contract/fail! (str fname ": the result type " (pr-str spec)
+                                     " is not a vector type; ucl has vectors only -- " (usage fname))
+                                {:form form}))))
+
+(defn ^:macro-support fresh-vector
+  "`(make-array n :element-type 'el ...)`."
+  [n el & opts]
+  (list* (api 'make-array) n (concat (when-not (= 't el) [:element-type (list 'quote el)]) opts)))
+
+(defn ^:macro-support bind-all [st forms prefix]
+  (reduce (fn [[st acc] f] (let [[st v] (bind st f prefix)] [st (conj acc v)])) [st []] forms))
+
+(defn ^:macro-support min-length [vs extra]
+  (let [ls (concat extra (map #(list (api 'length) %) vs))]
+    (if (next ls) (cons (api 'min) ls) (first ls))))
+
+(defn ^:macro-support elements-at
+  "[bindings els]: each sequence's element at `i`."
+  [vs i]
+  (let [els (mapv (fn [_] (gensym "el")) vs)]
+    [(vec (mapcat (fn [el v] [el (list (api 'elt) v i)]) els vs)) els]))
+
+(defn ^:macro-support expand-make-sequence [backend form]
+  (let [[_ rt size & kvs] form
+        el (result-element "make-sequence" rt form)
+        _  (when (= :none el)
+             (contract/fail! "make-sequence: nil is not a sequence type" {:form form}))
+        {:keys [order]} (parse-keys "make-sequence" (get (specs) "make-sequence") kvs form)
+        ie (first (filter #(= :initial-element (first %)) order))]
+    (apply fresh-vector size el (when ie [:initial-element (second ie)]))))
+
+(defn ^:macro-support expand-map [backend form]
+  (let [[_ rt f & seqs] form
+        el      (result-element "map" rt form)
+        st      (binder)
+        [st fs] (fn-spec st f)
+        [st vs] (bind-all st seqs "v")
+        [st n]  (bind st (min-length vs []) "n")
+        r       (gensym "r")
+        call    (fn [i k] (let [[bs els] (elements-at vs i)] (list 'let bs (apply-fn fs els k))))]
+    (if (= :none el)
+      (finish st (list 'do (counted-statement backend 0 n false (fn [i] (call i identity))) nil))
+      (finish (conj st r (fresh-vector n el))
+              (list 'do (counted-statement backend 0 n false (fn [i] (call i (fn [x] (store r i x))))) r)))))
+
+(defn ^:macro-support expand-map-into [backend form]
+  (let [[_ rsq f & seqs] form
+        st      (binder)
+        [st r]  (bind st rsq "r")
+        [st fs] (fn-spec st f)
+        [st vs] (bind-all st seqs "v")
+        [st n]  (bind st (min-length vs [(list (api 'length) r)]) "n")]
+    (finish st (list 'do
+                     (counted-statement backend 0 n false
+                                        (fn [i] (let [[bs els] (elements-at vs i)]
+                                                  (list 'let bs (apply-fn fs els (fn [x] (store r i x)))))))
+                     r))))
+
+(defn ^:macro-support expand-concatenate [backend form]
+  (let [[_ rt & seqs] form
+        el      (result-element "concatenate" rt form)
+        _       (when (= :none el)
+                  (contract/fail! "concatenate: nil is not a sequence type" {:form form}))
+        st      (binder)
+        [st vs] (bind-all st seqs "v")
+        [st ns] (bind-all st (map #(list (api 'length) %) vs) "n")
+        r       (gensym "r")
+        st      (conj st r (fresh-vector (if (seq ns) (cons '+ ns) 0) el))
+        offsets (reductions (fn [off n] (if (= 0 off) n (list '+ off n))) 0 ns)]
+    (finish st (concat ['do]
+                       (map (fn [v n off] (copy-range backend r v off 0 n false)) vs ns offsets)
+                       [r]))))
+
+(defn ^:macro-support expand-merge [backend form]
+  (let [[_ rt sq1 sq2 pred & kvs] form
+        el      (result-element "merge" rt form)
+        _       (when (= :none el)
+                  (contract/fail! "merge: nil is not a sequence type" {:form form}))
+        st      (binder)
+        [st a]  (bind st sq1 "v")
+        [st b]  (bind st sq2 "v")
+        [st ps] (fn-spec st pred)
+        {:keys [order]} (parse-keys "merge" (get (specs) "merge") kvs form)
+        [st kf] (bind-keys st order #{:key})
+        [st na] (bind st (list (api 'length) a) "n")
+        [st nb] (bind st (list (api 'length) b) "n")
+        [st n]  (bind st (list '+ na nb) "n")
+        r       (gensym "r")
+        st      (conj st r (fresh-vector n el))
+        i (counter backend "i") j (counter backend "j") k (counter backend "k")
+        x (gensym "x") y (gensym "y")
+        take-a  (fn [e] (list 'do (store r k e) (list 'recur (list 'inc i) j (list 'inc k))))
+        take-b  (fn [e] (list 'do (store r k e) (list 'recur i (list 'inc j) (list 'inc k))))
+        key     (:key kf)]
+    (finish st
+            (list 'loop [i 0 j 0 k 0]
+                  (list 'if (list '< k n)
+                        (list 'if (list '>= i na) (take-b (list (api 'elt) b j))
+                              (list 'if (list '>= j nb) (take-a (list (api 'elt) a i))
+                                    ;; stable: sequence-1's element unless sequence-2's is less
+                                    (list 'let [x (list (api 'elt) a i) y (list (api 'elt) b j)]
+                                          (apply-key key y (fn [ky] (apply-key key x (fn [kx]
+                                            (apply-fn ps [ky kx] (fn [t] (list 'if t (take-b y) (take-a x)))))))))))
+                        r)))))
+
+;; ===========================================================================
+;; mismatch, search
+;; ===========================================================================
+;; Each is one loop with two counters: an inner loop would be an expression
+;; -- an `if` test -- and an IIFE on Squint (D51).
+
+(defn ^:macro-support parse-two
+  "Shared front of the functions of two sequences: binds them, then each
+   keyword value as written, then the bounds of each."
+  [backend fname form]
+  (let [spec       (get (specs) fname)
+        [_ sq1 sq2 & kvs] form
+        st         (binder)
+        [st v1]    (bind st sq1 "v")
+        [st v2]    (bind st sq2 "v")
+        {:keys [order]} (parse-keys fname spec kvs form)
+        [st kf]    (bind-keys st order #{:key :test :test-not})
+        [st s1 e1] (bounds st v1 kf :start1 :end1)
+        [st s2 e2] (bounds st v2 kf :start2 :end2)
+        [st s1]    (bind st s1 "s")
+        [st e1]    (bind st e1 "e")
+        [st s2]    (bind st s2 "s")
+        [st e2]    (bind st e2 "e")
+        st         (check-bounds backend st v1 s1 e1)
+        st         (check-bounds backend st v2 s2 e2)]
+    {:st st :v1 v1 :v2 v2 :s1 s1 :e1 e1 :s2 s2 :e2 e2 :kf kf
+     :test (pair-test backend fname (:test kf) (:test-not kf) form)}))
+
+(defn ^:macro-support plus [a b] (if (= 0 a) b (list '+ a b)))
+
+(defn ^:macro-support compare-at
+  "Read v1[i] and v2[j], apply :key to each, and pass the test's form to `k`."
+  [{:keys [v1 v2 kf test]} i j k]
+  (let [a (gensym "a") b (gensym "b")]
+    (list 'let [a (list (api 'elt) v1 i) b (list (api 'elt) v2 j)]
+          (apply-key (:key kf) a (fn [ka] (apply-key (:key kf) b (fn [kb] (test ka kb k))))))))
+
+(defn ^:macro-support expand-mismatch [backend form]
+  (let [{:keys [st s1 e1 s2 e2 kf] :as p} (parse-two backend "mismatch" form)
+        i (counter backend "i") j (counter backend "j")
+        build
+        (fn [fe]
+          (if fe
+            ;; one past the rightmost position that differs
+            (list 'loop [i e1 j e2]
+                  (list 'if (list '> i s1)
+                        (list 'if (list '> j s2)
+                              (compare-at p (list 'dec i) (list 'dec j)
+                                          (fn [t] (list 'if t (list 'recur (list 'dec i) (list 'dec j)) i)))
+                              i)
+                        (list 'if (list '> j s2) i nil)))
+            (list 'loop [i s1 j s2]
+                  (list 'if (list '< i e1)
+                        (list 'if (list '< j e2)
+                              (compare-at p i j (fn [t] (list 'if t (list 'recur (list 'inc i) (list 'inc j)) i)))
+                              i)
+                        (list 'if (list '< j e2) i nil)))))]
+    (finish st (both-directions (:from-end kf) build))))
+
+(defn ^:macro-support expand-search [backend form]
+  (let [{:keys [st s1 e1 s2 e2 kf] :as p} (parse-two backend "search" form)
+        [st n1]   (bind st (if (= 0 s1) e1 (list '- e1 s1)) "n")
+        [st last] (bind st (list '- e2 n1) "last")
+        q (counter backend "p") k (counter backend "k")
+        build
+        (fn [fe]
+          ;; the start q of a candidate, k elements of it matched so far
+          (list 'loop [q (if fe last s2) k 0]
+                (list 'if (if fe (list '>= q s2) (list '<= q last))
+                      (list 'if (list '< k n1)
+                            (compare-at p (plus s1 k) (list '+ q k)
+                                        (fn [t] (list 'if t
+                                                      (list 'recur q (list 'inc k))
+                                                      (list 'recur (if fe (list 'dec q) (list 'inc q)) 0))))
+                            q)
+                      nil)))]
+    (finish st (both-directions (:from-end kf) build))))
 
 ;; ===========================================================================
 ;; The registry (I23)
@@ -874,6 +1193,14 @@
                  ("substitute" "substitute-if" "substitute-if-not"
                   "nsubstitute" "nsubstitute-if" "nsubstitute-if-not")
                  (expand-substitute backend form)
+                 ("remove-duplicates" "delete-duplicates")    (expand-remove-duplicates backend form)
+                 "make-sequence"                              (expand-make-sequence backend form)
+                 "map"                                        (expand-map backend form)
+                 "map-into"                                   (expand-map-into backend form)
+                 "concatenate"                                (expand-concatenate backend form)
+                 "merge"                                      (expand-merge backend form)
+                 "mismatch"                                   (expand-mismatch backend form)
+                 "search"                                     (expand-search backend form)
                  (expand-quantifier backend form))
       (contract/fail! (str "malformed " fname ": " (pr-str form) ". Write " (usage fname)
                            (when-not (:rest spec)

@@ -7,7 +7,8 @@
    defines here; the contract's let* returns a binding vector unchanged, which
    ends that expansion."
   (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
-                            count find some reduce reverse sort replace subseq remove])
+                            count find some reduce reverse sort replace subseq remove
+                            map merge])
   (:require [ucl.contract :as contract]
             [ucl.loop :as ucl-loop]
             [ucl.dart-emit :as dart-emit]

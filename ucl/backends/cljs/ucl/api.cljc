@@ -2,7 +2,8 @@
   "ucl on ClojureScript, macro half (runs on the JVM while ClojureScript
    compiles). The emit map is ucl.js-emit's, in the ClojureScript flavor."
   (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
-                            count find some reduce reverse sort replace subseq remove])
+                            count find some reduce reverse sort replace subseq remove
+                            map merge])
   (:require [cljs.env :as env]
             [ucl.contract :as contract]
             [ucl.js-emit :as js-emit]
@@ -37,5 +38,5 @@
 ;; strict fixtures supply the value at run time.
 (when env/*compiler*
   (swap! env/*compiler* update-in [:cljs.analyzer/namespaces 'cljs.core :defs]
-         merge {'ListNode {:name 'cljs.core/ListNode}
+         clojure.core/merge {'ListNode {:name 'cljs.core/ListNode}
                 'TreeNode {:name 'cljs.core/TreeNode}}))

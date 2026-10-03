@@ -101,4 +101,10 @@
     (signals? #"takes :test or :test-not, not both" (ucl/count 1 [1] :test = :test-not =)))
   (testing "a malformed call names what to write"
     (signals? #"malformed position" (ucl/position 1 [1] :start))
-    (signals? #"malformed every" (ucl/every odd?))))
+    (signals? #"malformed every" (ucl/every odd?)))
+  (testing "a result type: quoted, and a vector type"
+    (signals? #"must be quoted" (let [t 'vector] (ucl/map t inc [1])))
+    (signals? #"not a vector type" (ucl/concatenate 'list [1]))
+    (signals? #"nil is not a sequence type" (ucl/make-sequence nil 2)))
+  (testing "subseq as a place"
+    (signals? #"takes 2 or 3 arguments" (let [v [1]] (ucl/setf (ucl/subseq v) v)))))

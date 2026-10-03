@@ -34,7 +34,10 @@
    "sequences/reverse.lsp" "sequences/nreverse.lsp" "sequences/sort.lsp" "sequences/stable-sort.lsp"
    "sequences/remove.lsp"
    "sequences/substitute.lsp" "sequences/substitute-if.lsp" "sequences/substitute-if-not.lsp"
-   "sequences/nsubstitute.lsp" "sequences/nsubstitute-if.lsp" "sequences/nsubstitute-if-not.lsp"])
+   "sequences/nsubstitute.lsp" "sequences/nsubstitute-if.lsp" "sequences/nsubstitute-if-not.lsp"
+   "sequences/remove-duplicates.lsp" "sequences/mismatch.lsp" "sequences/search-vector.lsp"
+   "sequences/make-sequence.lsp" "sequences/map.lsp" "sequences/map-into.lsp"
+   "sequences/concatenate.lsp" "sequences/merge.lsp"])
 
 (def suites
   {"sequences" {:files sequence-files
@@ -161,7 +164,21 @@
   #{'count 'count-if 'count-if-not 'find 'find-if 'find-if-not 'position 'position-if
     'position-if-not 'reduce 'every 'some 'notany 'notevery
     'remove 'remove-if 'remove-if-not 'delete 'delete-if 'delete-if-not
-    'substitute 'substitute-if 'substitute-if-not 'nsubstitute 'nsubstitute-if 'nsubstitute-if-not})
+    'substitute 'substitute-if 'substitute-if-not 'nsubstitute 'nsubstitute-if 'nsubstitute-if-not
+    'mismatch 'search})
+
+;; a result type first: kept quoted, if ucl has it
+(def result-typed #{'make-sequence 'map 'concatenate 'merge})
+
+(defn tr-result-type [rt]
+  (let [t (if (and (seq? rt) (= 'quote (first rt))) (second rt) (if (nil? rt) ::none (skip "a computed result type")))]
+    (cond (= t ::none) nil
+          (= t 'nil) nil
+          (contains? #{'vector 'simple-vector} t) (list 'quote t)
+          (and (seq? t) (= 'vector (first t)) (<= 1 (count t) 3)
+               (contains? #{nil '* 't 'fixnum} (second t)))
+          (list 'quote (if (next t) (list 'vector (second t)) 'vector))
+          :else (skip (str "the result type " (pr-str t))))))
 
 ;; a new item before the item or predicate
 (def substitutes
@@ -170,7 +187,8 @@
 ;; the sequence first, then positional arguments, then keywords
 (def sequence-first
   {'fill [1 :keys] 'replace [1 :keys] 'copy-seq [0 :keys] 'subseq [2 :positional]
-   'reverse [0 :keys] 'nreverse [0 :keys] 'sort [1 :keys] 'stable-sort [1 :keys]})
+   'reverse [0 :keys] 'nreverse [0 :keys] 'sort [1 :keys] 'stable-sort [1 :keys]
+   'remove-duplicates [0 :keys] 'delete-duplicates [0 :keys]})
 
 ;; Common Lisp functions the suite passes or calls, and their Clojure; each
 ;; is also in ucl/conformance.clj's table, which maps them back
@@ -278,6 +296,27 @@
 
 (defn tr-call [[h & args :as f]]
   (cond
+    (result-typed h)
+    (let [[rt & more] args
+          rt' (tr-result-type rt)]
+      (when (and (nil? rt') (not= h 'map)) (skip "the result type nil"))
+      (case h
+        make-sequence (let [[n & kvs] more]
+                        (when (odd? (count kvs)) (skip "an odd number of keyword arguments (a program-error)"))
+                        (list* 'ucl/make-sequence rt' (tr n) (tr-keyword-args kvs)))
+        map (let [[f & seqs] more]
+              (when (some nil? seqs) (skip "a list (nil, the empty list, as a sequence)"))
+              (list* 'ucl/map rt' (tr-fn-value f) (map tr seqs)))
+        concatenate (do (when (some nil? more) (skip "a list (nil, the empty list, as a sequence)"))
+                        (list* 'ucl/concatenate rt' (map tr more)))
+        merge (let [[a b pred & kvs] more]
+                (when (or (nil? a) (nil? b)) (skip "a list (nil, the empty list, as a sequence)"))
+                (when (odd? (count kvs)) (skip "an odd number of keyword arguments (a program-error)"))
+                (list* 'ucl/merge rt' (tr a) (tr b) (tr-fn-value pred) (tr-keyword-args kvs)))))
+    (= h 'map-into)
+    (let [[r f & seqs] args]
+      (when (some nil? (cons r seqs)) (skip "a list (nil, the empty list, as a sequence)"))
+      (list* 'ucl/map-into (tr r) (tr-fn-value f) (map tr seqs)))
     (substitutes h)
     (let [[new a0 sq & kvs] args
           item? (contains? #{'substitute 'nsubstitute} h)]
@@ -287,7 +326,7 @@
              (tr-keyword-args kvs)))
     (sequence-functions h)
     (let [a0 (first args)
-          item? (contains? #{'count 'find 'position 'remove 'delete} h)]
+          item? (contains? #{'count 'find 'position 'remove 'delete 'mismatch 'search} h)]
       (when (some nil? (if (#{'every 'some 'notany 'notevery} h) (rest args) [(second args)]))
         (skip "a list (nil, the empty list, as a sequence)"))
       (case h
@@ -427,10 +466,17 @@
     (tr-expected-1 (first vals))
     (vec (map tr-expected-1 vals))))
 
+;; tests whose translation is not faithful, with why
+(def unfaithful
+  {'concatenate.7 "eq of two vectors (Clojure's = compares them deeply on Squint, and gives false for nil)"
+   'merge-vector.12 "a list (nil, the empty list, as a sequence) through a variable"
+   'merge-vector.14 "a list (nil, the empty list, as a sequence) through a variable"})
+
 (defn translate-test
   "{:name .. :case form} or {:name .. :skip reason}."
   [[_ tname form & expected]]
   (try
+    (when-let [why (unfaithful tname)] (skip why))
     (let [e (tr-expected expected)
           f (tr form)
           ;; an expected vector compares with the host array's elements

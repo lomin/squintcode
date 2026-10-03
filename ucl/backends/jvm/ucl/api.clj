@@ -9,7 +9,8 @@
    This namespace defines ucl/let and ucl/dotimes, so it excludes Clojure's
    and spells them clojure.core/let and clojure.core/dotimes."
   (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
-                            count find some reduce reverse sort replace subseq remove])
+                            count find some reduce reverse sort replace subseq remove
+                            map merge])
   (:require [ucl.contract :as contract]
             [ucl.loop :as ucl-loop]
             [ucl.seq :as seq])
@@ -210,7 +211,7 @@
         ifaces (mapv (fn [{s :name}] (ensure-slot-interface! s)) slots)
         _      (swap! structs assoc cname
                       (assoc model :class cname
-                             :slot-types (into {} (map (juxt :name :type) slots))))
+                             :slot-types (into {} (clojure.core/map (juxt :name :type) slots))))
         impls  (mapcat (fn [{s :name} f iface]
                          [iface
                           (list (getter s) ['_] f)
@@ -224,7 +225,7 @@
        ~@(for [{cn :name :keys [keys? arities]} constructors]
            (if keys?
              `(defn ~cn [& {:keys ~(mapv :name slots)
-                            :or ~(into {} (map (juxt :name :init) slots))}]
+                            :or ~(into {} (clojure.core/map (juxt :name :init) slots))}]
                 ~(new-form (mapv :name slots)))
              `(defn ~cn
                 ~@(for [{:keys [params binds values]} arities]
@@ -242,7 +243,7 @@
         key   [(ns-name *ns*) name]
         ;; no primitive hints in the protocol: a ^long there makes callers
         ;; compile a primitive invoke the protocol fn does not implement
-        sig   (vec (cons self (map #(vary-meta % dissoc :tag) params)))
+        sig   (vec (cons self (clojure.core/map #(vary-meta % dissoc :tag) params)))
         first? (not (contains? @generics key))]
     (swap! generics conj key)
     `(do

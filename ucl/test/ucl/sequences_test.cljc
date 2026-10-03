@@ -274,6 +274,108 @@
   (testing "curried"
     (is (= [0 2] (contents ((ucl/substitute 0 1) (arr [1 2])))))))
 
+(deftest remove-duplicates-test
+  (testing "the earlier of two matching elements goes; with :from-end the later"
+    (is (= [2 1 3] (contents (ucl/remove-duplicates (arr [1 2 1 3])))))
+    (is (= [1 2 3] (contents (ucl/remove-duplicates (arr [1 2 1 3]) :from-end true))))
+    (is (= [] (contents (ucl/remove-duplicates (arr [])))))
+    (is (= [1 2] (contents (ucl/remove-duplicates (arr [1 2])))))
+    (let [v (arr [1 1])]
+      (is (= [1] (contents (ucl/remove-duplicates v))))
+      (is (= [1 1] (contents v)))))
+  (testing "keywords: :start, :end, :key, :test, :test-not"
+    (is (= [1 1 2 3 3] (contents (ucl/remove-duplicates (arr [1 1 2 2 3 3]) :start 2 :end 4))))
+    (is (= [1 1 2 3] (contents (ucl/remove-duplicates (arr [1 1 2 2 3 3]) :start 2))))
+    (is (= [-1 2] (contents (ucl/remove-duplicates (arr [1 -1 2]) :key (fn [x] (* x x))))))
+    (is (= [1 2] (contents (ucl/remove-duplicates (arr [1 -1 2]) :key (fn [x] (* x x)) :from-end true))))
+    (is (= [11 22] (contents (ucl/remove-duplicates (arr [10 11 20 22]) :test (fn [a b] (== (quot a 10) (quot b 10)))))))
+    (is (= [10 20] (contents (ucl/remove-duplicates (arr [10 11 20 22]) :from-end true
+                                                    :test (fn [a b] (== (quot a 10) (quot b 10)))))))
+    (is (= [3] (contents (ucl/remove-duplicates (arr [1 2 3]) :test-not ==)))))
+  (testing "keys that are keywords and nil, under eql"
+    (is (= [:a nil :b] (contents (ucl/remove-duplicates (general [:a nil :a :b nil]) :from-end true)))))
+  (testing "delete-duplicates"
+    (is (= [2 1 3] (contents (ucl/delete-duplicates (arr [1 2 1 3])))))
+    (is (= [1 2 3] (contents (ucl/delete-duplicates (arr [1 2 1 3]) :from-end true))))
+    (is (= [11 22] (contents (ucl/delete-duplicates (general [10 11 20 22]) :test (fn [a b] (== (quot a 10) (quot b 10))))))))
+  (testing "curried"
+    (is (= [1 2] (contents ((ucl/remove-duplicates) (arr [1 1 2])))))))
+
+(deftest constructing-test
+  (testing "make-sequence: a vector of the result type"
+    (is (= [0 0 0] (contents (ucl/make-sequence '(vector fixnum) 3 :initial-element 0))))
+    (is (= [7 7] (contents (ucl/make-sequence 'vector 2 :initial-element 7))))
+    (is (== 4 (ucl/length (ucl/make-sequence 'fixnum-vector 4))))
+    (is (signals-error? (ucl/setf (ucl/elt (ucl/make-sequence '(vector fixnum) 1) 0) 3000000000))))
+  (testing "map: as long as the shortest sequence; nil maps for effect"
+    (is (= [2 4 6] (contents (ucl/map '(vector fixnum) (fn [x] (* 2 x)) (arr [1 2 3])))))
+    (is (= [11 22] (contents (ucl/map 'vector + (arr [1 2 3]) (arr [10 20])))))
+    (is (= [] (contents (ucl/map 'vector inc (arr [])))))
+    (let [seen (atom [])]
+      (is (nil? (ucl/map nil (fn [x] (swap! seen conj x)) (arr [1 2]))))
+      (is (= [1 2] @seen))))
+  (testing "map-into: into the result, as long as the shortest"
+    (let [r (arr [0 0 0])]
+      (is (= [5 7 0] (contents (ucl/map-into r + (arr [1 2]) (arr [4 5 6])))))
+      (is (= [5 7 0] (contents r))))
+    (let [c (atom 0)]
+      (is (= [1 2] (contents (ucl/map-into (arr [0 0]) (fn [] (swap! c inc))))))))
+  (testing "concatenate"
+    (is (= [1 2 3 4 5] (contents (ucl/concatenate '(vector fixnum) (arr [1 2]) (arr [3]) (arr [4 5])))))
+    (is (= [1 :a] (contents (ucl/concatenate 'vector (arr [1]) (general [:a])))))
+    (is (= [] (contents (ucl/concatenate 'vector)))))
+  (testing "merge: stable, sequence-1's element first among equals"
+    (is (= [1 2 3 4 5] (contents (ucl/merge '(vector fixnum) (arr [1 3 5]) (arr [2 4]) <))))
+    (is (= [10 11 20 21] (contents (ucl/merge 'vector (arr [10 20]) (arr [11 21]) <
+                                              :key (fn [x] (quot x 10))))))
+    (is (= [1 2] (contents ((ucl/merge 'vector (arr [1]) <) (arr [2]))))))
+  (testing "a result type that is not a vector type is rejected at expansion"
+    (is (= [1] (contents (ucl/map 'simple-vector identity (arr [1])))))))
+
+(deftest setf-subseq-test
+  (testing "(setf (subseq v start [end]) new): replace, the value new"
+    (let [v (arr [1 2 3 4 5]) n (arr [8 9])]
+      (is (= [8 9] (contents (ucl/setf (ucl/subseq v 1 4) n))))
+      (is (= [1 8 9 4 5] (contents v))))
+    (let [v (arr [1 2 3])]
+      (ucl/setf (ucl/subseq v 1) (arr [7 7 7 7]))
+      (is (= [1 7 7] (contents v))))
+    (let [v (arr [1 2 3]) i (atom 0)]
+      (ucl/setf (ucl/subseq v (swap! i inc)) (arr [9]))
+      (is (= [1 9 3] (contents v)))
+      (is (== 1 @i)))))
+
+(deftest mismatch-and-search-test
+  (testing "mismatch: the first index in sequence-1 that differs, or nil"
+    (is (== 2 (ucl/mismatch (arr [1 2 3]) (arr [1 2 4]))))
+    (is (nil? (ucl/mismatch (arr [1 2]) (arr [1 2]))))
+    (is (== 2 (ucl/mismatch (arr [1 2]) (arr [1 2 3]))))
+    (is (== 1 (ucl/mismatch (arr [1 2 3]) (arr [1]))))
+    (is (== 0 (ucl/mismatch (arr []) (arr [1]))))
+    (is (nil? (ucl/mismatch (arr []) (arr [])))))
+  (testing ":from-end: one past the rightmost index that differs"
+    (is (== 1 (ucl/mismatch (arr [1 2 3]) (arr [9 2 3]) :from-end true)))
+    (is (nil? (ucl/mismatch (arr [1 2]) (arr [1 2]) :from-end true)))
+    (is (== 1 (ucl/mismatch (arr [0 2 3]) (arr [2 3]) :from-end true))))
+  (testing "keywords"
+    (is (nil? (ucl/mismatch (arr [1 2 3]) (arr [9 2 3]) :start1 1 :start2 1)))
+    (is (nil? (ucl/mismatch (arr [1 2 3]) (arr [2 3]) :start1 1)))
+    (is (== 2 (ucl/mismatch (arr [1 2 3]) (arr [2 3 3]) :test <)))
+    (is (nil? (ucl/mismatch (arr [1 -2]) (arr [-1 2]) :key (fn [x] (* x x))))))
+  (testing "search: the index in sequence-2 where sequence-1 starts, or nil"
+    (is (== 2 (ucl/search (arr [3 4]) (arr [1 2 3 4 3 4]))))
+    (is (== 4 (ucl/search (arr [3 4]) (arr [1 2 3 4 3 4]) :from-end true)))
+    (is (nil? (ucl/search (arr [4 3]) (arr [1 2 3 4]))))
+    (is (== 0 (ucl/search (arr []) (arr [1 2]))))
+    (is (== 2 (ucl/search (arr []) (arr [1 2]) :from-end true)))
+    (is (nil? (ucl/search (arr [1 2 3]) (arr [1 2]))))
+    (is (== 4 (ucl/search (arr [3 4]) (arr [1 2 3 4 3 4]) :start2 3)))
+    (is (== 1 (ucl/search (arr [9 2 3]) (arr [1 2 3]) :start1 1)))
+    (is (== 1 (ucl/search (arr [2 3]) (arr [1 3 4]) :test (fn [a b] (== (inc a) b))))))
+  (testing "curried: short of sequence-2"
+    (is (== 1 ((ucl/search (arr [2])) (arr [1 2]))))
+    (is (== 1 ((ucl/mismatch (arr [1 3])) (arr [1 2]))))))
+
 (deftest curried-form-test
   (testing "a sequence function short of its sequence is a function of it (D48)"
     (is (== 2 ((ucl/count-if odd?) (arr [1 3 4]))))
@@ -327,4 +429,10 @@
   (is (= [0 0 1 2] (contents (k/shifted (arr [1 2 3 4]) 2))))
   (is (= [1 3] (contents (k/without (arr [1 2 3 2]) 2))))
   (is (= [-1 2 3] (contents (k/drop-last-negatives (arr [-1 2 -3 3 -4]) 2))))
-  (is (= [0 2 0] (contents (k/clamp-negatives (arr [-1 2 -3]))))))
+  (is (= [0 2 0] (contents (k/clamp-negatives (arr [-1 2 -3])))))
+  (is (= [1 2 3] (contents (k/distinct-values (arr [1 2 1 3])))))
+  (is (= [1 4 9] (contents (k/squares (arr [1 -2 3])))))
+  (is (= [1 2 3] (contents (k/joined (arr [1]) (arr [2 3])))))
+  (is (= [1 2 3 4] (contents (k/merged (arr [1 4]) (arr [2 3])))))
+  (is (== 2 (k/common-prefix (arr [1 2 3]) (arr [1 2 4]))))
+  (is (== 2 (k/find-run (arr [1 2 3 3 3 4]) 3))))
