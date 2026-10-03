@@ -158,6 +158,12 @@
     ;; a top-level def with a non-literal value would survive tree shaking.
     (when-let [leak (re-find #"ucl/(contract|js_emit|leetcode|test)\.mjs" (slurp output))]
       (exit! (str "ERROR: " output " contains " (first leak) " -- macro-time or test code leaked")))
+    ;; An IIFE is Squint's let/loop in expression position: legal, but 8x in a
+    ;; hot loop (ucl H22). Bind such a value in ucl/let instead (ucl D35).
+    (let [iifes (count (re-seq #"\(\(\) =>" (slurp output)))]
+      (when (pos? iifes)
+        (println (str "  WARNING: " output " contains " iifes " IIFE(s) -- a let or loop in"
+                      " expression position; bind its value in ucl/let"))))
     (println (str "  " output " (" (fs/size output) " bytes)"))))
 
 (defn- problems []
