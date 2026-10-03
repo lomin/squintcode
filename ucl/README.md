@@ -6,6 +6,11 @@ library, its suite on three hosts, every solution ported, `macros.cljc` and the
 predecessor `setf/` deleted (D27). Implementation-time decisions are I1–I9
 (§11); what implementing taught is H27–H33 (§10) and §15.
 
+**Variables** (2026-10-03, a second grilling session): `ucl/let`, `ucl/let*`,
+assignable parameters and `ucl/dotimes`, so that a loop's state needs neither
+`recur` arguments nor an IIFE (§4.1, D29–D37, I10–I13, H34–H38). The terms are
+in [GLOSSARY.md](./GLOSSARY.md).
+
 ```bash
 ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint
 bb test                    # that, then every solution on all three hosts
@@ -15,8 +20,9 @@ bb build                   # LeetCode submissions: Squint, safety 0
 This document is the design of record. It says what `ucl` is, the rules every
 decision is measured against, each decision and what decided it, the
 measurements behind them, what was rejected, and what was got wrong on the way.
-Decisions are numbered `D1`–`D28` after the grilling question that settled them;
-a gap in the numbering is a question that was folded into another.
+Decisions `D1`–`D28` are numbered after the first grilling session's question
+that settled them (a gap is a question folded into another); `D29`–`D37` come
+from the second, on variables.
 
 ---
 
@@ -102,8 +108,11 @@ ucl/
   testkit/<host>/ucl/test.*       ucl.test: one test vocabulary on every host (I4)
   testkit/<host>/ucl/leetcode.*   strict ListNode / TreeNode fixtures (D19)
   test/ucl/*_test.cljc            the suite -- byte-identical on every host
+  test/ucl/kernels.cljc           LeetCode-shaped functions; their Squint build must have no IIFE
+  test-jvm/ucl/*_test.clj         expansion-error tests (the JVM can expand a form at run time)
   run-tests.sh                    run it on all three hosts; any failure fails
   bench/                          every measurement in this document
+  GLOSSARY.md                     the terms: variable, local, place, positions
 ```
 
 Source roots per host -- exactly one backend each:
@@ -128,7 +137,12 @@ Source roots per host -- exactly one backend each:
   needs it to make the fn available at expansion time (H20); everywhere else it
   is inert metadata. It is host knowledge in shared code, but not a branch.
 - **Backends exclude the `clojure.core` names they define**:
-  `(:refer-clojure :exclude [make-array min max defstruct defmethod])`.
+  `(:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes])`.
+  The JVM backend, whose own code needs Clojure's `let`, spells it
+  `clojure.core/let` throughout: after `defapi`, a bare `let` in that namespace
+  is ucl's, and a reload would silently compile the backend against it.
+  (`let*` is a special form, not a var: `ucl/let*` is a macro only when called
+  qualified, which clients always do.)
 - **Macro-time code must not reach a submission.** Squint compiles the contract
   and the JS emitter to modules too, and the backend imports them; esbuild's tree
   shaking drops them only if every top-level `def` has a literal value. A table
@@ -163,16 +177,22 @@ meaning.
 | `(ucl/make-hash-table :initial-contents {k v})` | construct a hash table | D22 |
 | `(ucl/gethash key table [default])` | read; key first, as in Common Lisp | D2, D6 |
 | `(ucl/slot-value obj 'slot)` | read a slot; the quoted name is consumed at compile time | D6 |
-| `(ucl/setf place v)` `(ucl/incf place [d])` `(ucl/decf place [d])` | assign / read-modify-write any of the places above | D6 |
+| `(ucl/setf place v)` `(ucl/incf place [d])` `(ucl/decf place [d])` | assign / read-modify-write any of the places above, or a variable | D6, D29 |
+| `(ucl/let ((var init) …) (declare …) body…)` `(ucl/let* …)` | bind variables, in parallel / in order | D29, D31, D32 |
+| `(ucl/dotimes (var count [result]) (declare …) body…)` | `var` from 0 below `count`, then `result` | D33 |
 | `(ucl/min a b …)` `(ucl/max a b …)` | inline in call position; functions as values (`(reduce ucl/max …)`) | D21 |
 | `ucl/most-positive-fixnum` `ucl/most-negative-fixnum` | ±2³¹ bounds (D10) | D23 |
 | `ucl/double-float-positive-infinity` `…-negative-…` | the SBCL/ECL extension names | D23 |
-| `ucl/defun` + `(declare (type …))` | function with type declarations | D18 |
+| `ucl/defun` + `(declare (type …))` | function with type declarations; a parameter the body assigns is a variable | D18, D36 |
 | `ucl/defstruct` `ucl/defmethod` `ucl/with-slots` | classes | D18 |
 
-**Loops are Clojure's own `loop`/`recur`** with `elt`/`length` (D20). They
-compile to a plain `while` on every host and need no contract code. `aloop` and
-`forv` are retired; a Common Lisp `LOOP` subset (`ucl/loop`) may be added later.
+**Loops are Clojure's own `loop`/`recur`** with `elt`/`length` (D20), plus
+`ucl/dotimes` (D33). They compile to a plain `while` on every host. `aloop` and
+`forv` are retired; a Common Lisp `LOOP` subset (`ucl/loop`) stays reserved
+until a solution needs more than `dotimes` and a "while" loop (D33).
+
+**A loop's state lives in variables** (§4.1): an inner loop is a statement that
+assigns them, and a loop's value is bound with `ucl/let`, never with `let`.
 
 **Numeric equality is Clojure's `==`** (inline `===` on Squint). Squint compiles
 `=` to a variadic deep-equality call even for two numbers (H13).
@@ -189,6 +209,53 @@ costs 8x (§9.6, H22). So nothing is bound that need not be:
 - Otherwise only *expressions* are bound; symbols and literals are used as is.
 - `min`/`max` on JS: an inline ternary when every argument is a symbol or
   literal, `Math.min`/`Math.max` otherwise -- never a `let` (§9.6).
+
+### 4.1 Variables (D29–D36)
+
+A **variable** is a name ucl binds that `setf`, `incf` and `decf` can assign: one
+bound by `ucl/let`/`ucl/let*`, or a `ucl/defun`/`ucl/defmethod` parameter the
+body assigns (the `defmethod` instance excepted). Every other name is a
+**local** -- Clojure's `let`, `loop`, `fn`, the `ucl/dotimes` counter -- and
+assigning one is a compile-time error naming it (D31).
+
+```clojure
+(ucl/let ((left 0) (total 0))             ; parallel, as Common Lisp's let
+  (declare (type fixnum left) (type (signed-byte 53) total))
+  (ucl/dotimes (r n total)
+    (loop []                              ; a "while" loop: a statement
+      (when (too-wide? left r)
+        (ucl/incf left)
+        (recur)))
+    (ucl/incf total (- r left -1))))
+```
+
+- **Why.** Clojure locals are immutable, so a loop's state could only travel in
+  `recur` arguments, and an inner loop's result only as a value. A `loop` or
+  `let` in expression position is an IIFE on Squint (H22, 2–2.5× on LeetCode
+  2762, §9.8) and a one-shot `fn` on the JVM (H36). Variables make the inner
+  loop a statement.
+- **Binding** (D32): `ucl/let` binds in parallel -- every init sees the outer
+  names -- and `ucl/let*` in order. `x` or `(x)` starts as nil, which a variable
+  declared `fixnum` or `(signed-byte 53)` may not (a compile-time error, as
+  SBCL warns). Inits run left to right.
+- **Return-position assignment** (D35). An init that is a `loop`, `let`, `do`,
+  `if`, `when`, `cond`, `case`, `ucl/dotimes`, ... is not bound as a value: a
+  fresh variable is declared, the init runs as a statement, and each of its
+  return positions assigns that variable. `(ucl/setf x <loop>)` on a variable
+  does the same (I10). So `(ucl/let ((j (loop …))) …)` has no IIFE on any host.
+- **Representation** (D30): Squint, a plain `let` assigned in place; ClojureScript
+  and the JVM, a one-field cell (ClojureScript cannot assign a local, H35). The
+  JVM cell is a primitive `long` when the variable is declared `fixnum` or
+  `(signed-byte 53)`, else an `Object` with a compile-time warning (D34). A cell
+  that does not escape costs nothing: V8 and the JIT remove it (§9.8).
+- **Checks** (D34): at safety ≥ 1 a store into a variable declared `fixnum` or
+  `(signed-byte 53)` -- its init included -- signals when the value is outside
+  the type.
+- **One walker** (shared with `with-slots`) rewrites a variable's reads and its
+  uses as a place. It knows Clojure's binding forms (`let`, `loop`, `fn`,
+  `letfn`, `doseq`, `for`, `if-let`, `catch`, ...), ucl's (`ucl/let`,
+  `ucl/dotimes`, `with-slots`), and that `case` constants are not evaluated. It
+  does not expand user macros (§13).
 
 ### Not in v1
 
@@ -394,6 +461,7 @@ What the checks are, per host:
 | `incf`/`decf` of a non-number | `check-number` | `check-number` |
 | `vector-push-extend` on a non-adjustable vector | `push-checked` | the host's own |
 | `:initial-contents` length ≠ dimension | `check-contents` (literal: at compile time) | same |
+| store into a variable declared `fixnum` / `(signed-byte 53)` (D34) | `check-fixnum` / `check-sb53` | same |
 
 Submission builds (`bb build`, `bb build-one`) use 0; tests use the default.
 `ucl/run-tests.sh` compiles the suite at safety 0 as well and fails if any
@@ -403,7 +471,8 @@ invalidate that cache — clean before switching (the `bb` tasks do).
 
 **The JVM warns at compile time whenever it falls back** because a type is
 unknown -- `elt`, `setf` of `elt`, `length` and `vector-push-extend` on a
-receiver of unknown type compile to `nth` / a dispatching helper / `count`.
+receiver of unknown type compile to `nth` / a dispatching helper / `count`;
+a variable with no declared type gets a boxed `Object` cell (D34).
 Nothing else would point at those paths. `slot-value` never falls back (I2).
 In test code the warning is expected: a test's locals are rarely declared.
 
@@ -450,7 +519,7 @@ calls; all six give identical answers.
 | 930 numSubarraysWithSum, n=3·10⁴ | 115 | **102** | 1433 | **984** |
 
 `aloop` adds, per iteration, the `it` ternary and a `squint_core.truth_` call;
-`forv` adds `dotimes`' binding. That is the 12–26%. → D20.
+`forv` adds `dotimes`' binding. That is the 12–26%. → D20. (The binding was not the cause -- §15.)
 
 ### 9.3 `min`/`max` (`bench/loops/inline_variants.cljc`)
 
@@ -529,6 +598,59 @@ returns the same answer.
 
 Faster or equal everywhere; the equal pairs are within noise. Bundles shrank
 from 2.0–3.5 KB to 0.7–1.5 KB.
+
+### 9.8 Variables (`bench/variables/`)
+
+How a variable could be stored -- a 200k-element running sum, µs:
+
+| host | storage | µs |
+|---|---|---|
+| JVM | `loop`/`recur` (no variable) | 90–141 |
+| JVM | one-element `long-array` | 75–103 |
+| JVM | `deftype` cell, `^long` field (D30) | **77–102** |
+| JVM | `volatile!` | 2392–2434 |
+| V8 | `let` assigned in place (Squint, D30) | **167–180** |
+| V8 | object with one field (ClojureScript `deftype`, D30) | **185** |
+| V8 | one-element array | 588–595 |
+| V8 | Squint `volatile!` / `vreset!` | 340–348 |
+
+A volatile boxes every write and fences it on the JVM, and is three core calls
+per access on Squint. A cell that never escapes is removed by the JIT.
+
+LeetCode 2762 (Continuous Subarrays), n=10⁵, three builds of the same
+monotonic-deque algorithm; median of 7 fresh processes, µs warm:
+
+| build | random values | random walk | sorted | values 1..4 |
+|---|---|---|---|---|
+| hand-written JavaScript (push, then shrink) | 1300 | 1472 | 756 | 1336 |
+| ucl, one flat `loop`/`recur` (before variables; shrinks first) | 1232 | 1702 | 1037 | 1643 |
+| ucl, variables, push then shrink | 1312 | 1576 | 791 | 1463 |
+| **ucl, variables, shrink then push** (the solution) | **1110** | **1428** | 866 | **1302** |
+
+The flat build -- the only IIFE-free way to write it before variables -- re-checks
+every queue condition on each step. With variables the generated code is the
+hand-written loop (four `while`s, `let`s assigned in place). Written naturally
+without variables, each inner `loop` bound in `let` was an IIFE: 2–2.5× the
+hand-written time. The remaining differences are the algorithm's order, not
+the code generation: the same order hand-written and through ucl measure alike.
+
+A LeetCode-like mix (`lc2762-mix.mjs`: 60 arrays, mostly random values up to
+10⁹), median of 7 processes, ms per pass:
+
+| build | first pass | warm |
+|---|---|---|
+| flat | 40.2 | 28.0 |
+| hand-written | 32.9 | 26.4 |
+| variables, push then shrink | 34.7 | 26.6 |
+| **variables, shrink then push** | **31.1** | **24.4** |
+
+**LeetCode's runtime cannot rank these.** Identical submissions of one build
+measured 74 and 88 ms (flat) and 96 and 70 ms (variables, shrink first) on
+2026-10-03; every build reached "Beats 100%" at least once. A difference under
+~25% needs the local benchmark.
+
+`ucl/dotimes` against the same loop written with `loop`/`recur` (412 fizzBuzz,
+n=10⁴): identical JavaScript, 43–46 µs both (D33, §15).
 
 ## 10. Host facts
 
@@ -639,6 +761,26 @@ Found while implementing v1 (Squint 0.14.211, ClojureScript 1.12.42):
   current namespace: a JVM-side macro emitting `undefined?` (ClojureScript only)
   produces `ucl.js-emit/undefined?`. Emit host-only names unqualified (`~'undefined?`).
 
+Found while adding variables (Squint 0.14.211, ClojureScript 1.12.42, Clojure
+1.12, Node 24):
+
+- **H34** — Squint compiles a `let` binding tagged `^:mutable` to a JS `let`
+  that `set!` assigns; untagged, it is a `const`, and `set!` fails at run time.
+  A `loop` in statement position is a plain `while`; in expression position, an
+  IIFE (H22).
+- **H35** — ClojureScript refuses `set!` on a local ("Can't set! local var or
+  non-mutable field"). `(js* "~{} = ~{}" x v)` would assign it but is a hack
+  (rejected, §12); `(set! (.-v cell) v)` on a `deftype` with a `^:mutable`
+  field is ordinary property assignment.
+- **H36** — Clojure compiles a `loop` in expression position as a one-shot
+  `fn` (an extra class, `core$expr$fn__141`), whose value comes back boxed; in
+  statement or return position it is inline.
+- **H37** — A `volatile!` costs ≈ 25× a primitive local on the JVM and ≈ 2× on
+  Squint; a non-escaping one-field cell costs nothing on either (§9.8).
+- **H38** — A protocol method whose signature carries a `^long` parameter hint
+  makes Clojure compile callers as a primitive invoke (`IFn$OLO`) that the
+  protocol function does not implement: `ClassCastException` at the call.
+
 ## 11. Decision log
 
 "Evidence" means a measurement or probe decided it; "user judgement" means it
@@ -673,6 +815,15 @@ was decided on reasoning, with the trade-offs on the table.
 | D26 | `defapi` generates every backend's API surface | evidence (H6, H7) |
 | D27 | Big-bang migration from `macros.cljc` | user judgement |
 | D28 | This README is the design of record; benchmarks are committed | user judgement |
+| D29 | A loop's state lives in **variables**; `setf`/`incf`/`decf` assign a variable as a place | user judgement, evidence (§9.8) |
+| D30 | Squint: a `^:mutable` local; ClojureScript and JVM: a one-field `deftype` cell (primitive `long` when declared). No volatiles, no `js*` | evidence (§9.8, H35, H37), user judgement |
+| D31 | Only ucl binds variables; assigning a local is a compile-time error | user judgement |
+| D32 | `ucl/let` (parallel) and `ucl/let*` (sequential), Common Lisp syntax with a `declare` head | user judgement |
+| D33 | `ucl/dotimes (var count [result])` -- one contract expansion over `loop`/`recur`, no backend operation; no `ucl/loop` yet | evidence (§9.8), user judgement |
+| D34 | An undeclared JVM variable is an `Object` cell with a warning; declared integer variables are checked on store at safety ≥ 1 | user judgement |
+| D35 | A compound init of `ucl/let` runs as a statement whose return positions assign the variable | user judgement |
+| D36 | `ucl/defun` / `ucl/defmethod` parameters the body assigns are variables (not the `defmethod` instance) | user judgement |
+| D37 | Terms in `GLOSSARY.md`; decisions stay in this log | user judgement |
 
 ### Implementation decisions (I1–I9)
 
@@ -689,6 +840,10 @@ Made while building v1, not in the grilling session; each is reversible.
 | I7 | Solutions declare LeetCode's `number[]` as `simple-vector`; tests build inputs with `make-array` | a declaration is a promise about representation, and LeetCode passes a plain JS Array |
 | I8 | `setf/` deleted with `macros.cljc`; its tests of `aloop`, `aref`, `push-end`, `dict` retired | D27; the `ucl` suite covers the same behaviour under the new names |
 | I9 | Project Squint pinned to 0.14.211; `deps.edn` aliases `:jvm` / `:cljs` select the backend | latest-only rule; backend selection by source root |
+| I10 | `(setf var <compound>)` uses return-position assignment too, on variables only | the 2762 kernel's last IIFE; a variable has no subforms whose evaluation order it could change, an `elt` place has |
+| I11 | A variable is a place kind, `(%var name type)`, which only the walker writes | `setf`/`incf`/`decf` reuse the place machinery: evaluate-once, checks, return values |
+| I12 | `run-tests.sh` fails on an IIFE in `test/ucl/kernels.cljc`'s safety-0 build; `bb build` warns on one in any submission | the claim of D29 is structural; a submission may knowingly bind a `try` |
+| I13 | Expansion errors are tested on the JVM only (`test-jvm/`) | the contract is shared; only the JVM expands a form at test run time |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -725,6 +880,27 @@ backend selection by source root; mutable host collections only.
   collection `=`.
 - **Hand-written per-backend delegates** (D26) — ~20 lines repeated per host.
 - **Incremental or slice-by-slice migration** (D27) — two vocabularies coexist.
+- **Leave inner-loop state in `recur`** (D29) — the flat state machine it forces
+  re-checks every condition per step: 1.25–1.6× hand-written on 2762.
+- **A flattening compiler** (D29) — a ucl loop macro rewriting nested loops into
+  one `loop`/`recur` keeps locals immutable but generates that same slow shape.
+- **Volatiles** (D30) — 25× on the JVM, 2× on Squint (H37).
+- **`js*` assignment on ClojureScript** (D30) — as fast as Squint, but a hack.
+- **Rewriting mutating code into `loop`/`recur` on the JVM** (D30) — a hard
+  compiler problem; the cell is already free.
+- **Mutability inferred by a walker over any `let` in a `defun`** (D31) — magic,
+  and a plain `let` would change meaning silently.
+- **Clojure's `[x 0 y 1]` binding syntax for `ucl/let`** (D32) — `ucl/defun`
+  already takes Common Lisp syntax and `declare`.
+- **`ucl/loop` now, or `do`/`do*`** (D33) — once state lives in variables, a
+  loop form buys readability only; no solution needs it yet.
+- **A backend operation for `dotimes`** (D33) — Squint's native `for` and
+  `loop`/`recur`'s `while` measure the same.
+- **Inferring a JVM variable's type from its init** (D34) — `(x 0)` then
+  `(setf x 1.5)` would truncate on the JVM and not on JS: different results per
+  host.
+- **Parameters immutable, rebound with `ucl/let`** (D36) — one rule fewer, but
+  the same code; Common Lisp assigns parameters.
 
 ## 13. Open items
 
@@ -740,8 +916,20 @@ backend selection by source root; mutable host collections only.
     values, so an omitted `&optional` argument is allowed).
   - On the JS hosts a constructor named like the struct cannot be combined with
     other constructors.
-  - `with-slots` walks its body without expanding macros: a user macro that
-    binds a slot's name is not seen as shadowing it.
+  - `with-slots`, `ucl/let` and assignable parameters walk their body without
+    expanding macros: a user macro that binds a slot's or variable's name is not
+    seen as shadowing it, and an assignment a macro generates is not seen (an
+    assigned parameter then stays a local, and the `setf` fails to compile --
+    loudly, never silently).
+  - Return-position assignment covers `if if-not when when-not cond case do let
+    let* loop ucl/dotimes with-slots`; any other init (`try`, `and`, a user
+    macro) is bound as a value -- an IIFE on Squint where that host needs one.
+  - A `ucl/let` in expression position is still a `let` there: an IIFE on
+    Squint. Bind it as an init of an enclosing `ucl/let` instead.
+  - `ucl/defun`/`ucl/defmethod` accept required parameters only, so "assignable
+    `&optional`/`&aux` parameters" (D36) has nothing to apply to yet.
+  - LeetCode 19's `bypass` contains one IIFE (a `some->` in a `setf` value), off
+    the hot path; `bb build` reports it.
   - The JVM fixtures accept only the all-slots constructor (`(new ListNode 1
     nil)`, not `(new ListNode 1)`).
 - **The ClojureDart spike predates v1.** `prototypes/ucl-cljd` still runs its
@@ -813,6 +1001,11 @@ was a claim made without compiling or measuring first.
 | §7 said a BOA constructor runs "with and without `new`" | True on the JS hosts only; on the JVM `new` reaches the deftype's own constructor (§7). |
 | v1's first `incf` on a JVM `gethash` | Passed the new-value form to a write that uses its value twice, so the increment ran twice. Caught by the suite; `incf` now binds the value whenever a backend's write is not evaluate-once. |
 | v1's first submissions | Carried contract code -- a table of quoted lists -- through tree shaking (H31). Caught only by reading a bundle; `bb build` now fails on it. |
+| §9.2: "`forv` adds `dotimes`' binding. That is the 12–26%." | Squint's `dotimes` compiles to a native `for` that measures the same as `loop`/`recur` (§9.8). Whatever made `forv` slower, it was not that binding; the cause is unmeasured. |
+| Variables grilling: "the contract can reject a `ucl/loop` in expression position" | A macro does not know its position; the rule can only be documented. |
+| Variables grilling: "assignable parameters include `&optional` and `&aux`" (D36) | `ucl/defun`/`ucl/defmethod` take required parameters only (§13). |
+| v1's `defmethod` with a declared `fixnum` parameter | Put `^long` into the protocol signature; every call threw (H38). No solution declared one; the variables suite found it. |
+| The first variables kernel of 2762 | Still had one IIFE: `(setf maxt (loop …))`. Found by the I12 check; fixed by I10. |
 
 The pattern is unchanged from `setf`: every serious error was an inference made
 where a compile or a measurement would have answered the question.

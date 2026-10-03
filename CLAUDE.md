@@ -73,17 +73,26 @@ Rules:
 
 - **Always use the alias** (`ucl/elt`, `ucl/min`), never `:refer` — names that
   clash with `clojure.core` (`min`, `max`, `make-array`) break on Squint if referred.
-- **Loops are `loop`/`recur`** with `ucl/elt` and `ucl/length`. `aloop`/`forv`
-  no longer exist; they were measured slower.
+- **Loops are `loop`/`recur` or `ucl/dotimes`** with `ucl/elt` and `ucl/length`.
+  `aloop`/`forv` no longer exist; they were measured slower.
+- **A loop's state lives in variables** (`ucl/let`, `ucl/let*`, or a parameter
+  the body assigns): `ucl/setf`/`ucl/incf` assign them, so an inner loop is a
+  statement — `(loop [] (when test … (recur)))` is a "while". Bind a loop's
+  value with `ucl/let`, never `let`: a `loop`/`let` in expression position is an
+  IIFE on Squint (8×); `ucl/let` turns it into a statement. Assigning a plain
+  Clojure local is a compile-time error.
 - Use `ucl/min`/`ucl/max`, not `clojure.core`'s: Squint's are slow runtime calls.
 - Numeric equality: `==`, not `=` (Squint's `=` is a deep-equality call).
 - Vocabulary (exact Common Lisp names and argument order): `make-array`, `elt`,
   `length`, `vector-push-extend`, `make-hash-table`, `(gethash key table [default])`,
-  `(slot-value obj 'slot)`, `setf`, `incf`, `decf`, `min`, `max`, `defun` +
-  `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
+  `(slot-value obj 'slot)`, `setf`, `incf`, `decf`, `min`, `max`,
+  `(let ((var init)…) (declare …) …)`, `let*`, `(dotimes (i n [result]) …)`,
+  `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
   `defmethod`, `with-slots`, `most-positive-fixnum`, `double-float-positive-infinity`.
   Types: `fixnum` (32-bit everywhere), `(signed-byte 53)`, `fixnum-vector`,
-  `sb53-vector`, `simple-vector`. Details: `ucl/README.md` §4–§8.
+  `sb53-vector`, `simple-vector`. Declare a variable's type: on the JVM an
+  undeclared one is boxed. Details: `ucl/README.md` §4–§8, terms in
+  `ucl/GLOSSARY.md`.
 - Design problems (`NumArray`, `LRUCache`): `ucl/defstruct` + `ucl/defmethod`.
   A method name that clashes with `clojure.core` (`get`, `next`, `pop`) needs
   `(:refer-clojure :exclude [...])`.
@@ -122,7 +131,7 @@ ucl/                         the library -- see ucl/README.md
   shared/ucl/contract.cljc     all host-agnostic logic; names no host
   backends/{jvm,js,cljs,squint}/  per-host emitters
   testkit/{jvm,cljs,squint}/   ucl.test + LeetCode fixtures (never in a submission)
-  test/ucl/                    the library's own suite
+  test/ucl/                    the library's own suite (+ test-jvm/: expansion errors)
 bb/tasks/lc.clj              test and build tasks
 ```
 
@@ -140,7 +149,7 @@ the first silently wins.
   `squint.edn` carrying `:ucl/safety 0` (no runtime checks), no test kit;
   `esbuild --format=esm --bundle --tree-shaking=true`, then the trailing
   `export {…}` is stripped → `out/<problem>.js`. The build fails if any ucl
-  macro-time or test-kit code reached the bundle.
+  macro-time or test-kit code reached the bundle, and warns on any IIFE.
 - **Must** be `--format=esm`, not `--format=iife`: LeetCode does not accept the
   `(() => { … })()` wrapper.
 - Squint is pinned to the latest release (0.14.211); 0.12.x is not supported.
