@@ -46,7 +46,7 @@ measurements behind them, what was rejected, and what was got wrong on the way.
 Decisions `D1`–`D28` are numbered after the first grilling session's question
 that settled them (a gap is a question folded into another); `D29`–`D37` come
 from the second, on variables; `D38`–`D43` from the third, on ClojureDart;
-`D53`–`D62` from the fifth, on `ucl/loop` and blocks.
+`D53`–`D63` from the fifth, on `ucl/loop` and blocks.
 
 ---
 
@@ -1501,6 +1501,7 @@ was decided on reasoning, with the trade-offs on the table.
 | D60 | Every `ucl/loop` and block case also runs on SBCL and ECL; the suite fails unless all six agree; a form on which they disagree where the standard is silent is rejected | heuristic 3, D2 (agent) |
 | D61 | A rejection names the clause or form, the reason, and what to write instead | agent |
 | D62 | Every solution with a loop is ported to `ucl/loop` beside its original (`<problem>_loop.cljc`, same LeetCode names, shared test cases); a port passes I12/I19 and may not be slower | user judgement |
+| D63 | D62's ports are accepted as measured (§9.14): on Dart equal or faster; on V8 121 +13%, the cost of the clause order its source asks for, and 2762 +4–9%, near the run-to-run spread | user judgement, evidence (§9.14) |
 
 ### Implementation decisions (I1–I21)
 
@@ -1724,7 +1725,8 @@ backend selection by source root; mutable host collections only.
     `loop-finish`, and parallel stepping (`for … and …`). Each is rejected
     with a message saying so.
   - The ports (§9.14) are equal or faster on Dart; on V8 121 is +13% for its
-    clause order, and 2762 +4–9%, near the run-to-run spread. No port leaves
+    clause order, and 2762 +4–9%, near the run-to-run spread -- accepted
+    (D63). No port leaves
     a nested loop, so the cost of that exit's flag is still unmeasured; nor
     is a hash-table iteration step (D58, not built).
   - An exit is static only (D55): `(return x)` inside an `fn`, an argument, a
