@@ -40,23 +40,24 @@ None: every translated case returns the suite's value on ucl.
 
 | reason | tests |
 |---|---|
-| a list | 269 |
+| a list | 329 |
 | an error test | 203 |
-| bit vector | 152 |
-| uses a function ucl does not have (loop) | 136 |
+| bit vector | 164 |
 | an expected list | 117 |
 | an expected string | 61 |
 | a string | 50 |
+| character | 49 |
 | an expected dotted pair | 45 |
-| character | 43 |
 | an expected bit vector | 42 |
+| ucl rejects at expansion: ucl: loop: collect builds a list; ucl has no lists (D53) | 35 |
 | an expected character | 32 |
 | uses a function ucl does not have (do-special-strings) | 29 |
 | uses a function ucl does not have (check-type-error) | 27 |
-| uses a function ucl does not have (do-special-integer-vectors) | 26 |
-| uses a function ucl does not have (list) | 22 |
+| uses a function ucl does not have (do-special-integer-vectors) | 27 |
+| uses a function ucl does not have (list) | 23 |
 | make-array with a fill pointer and other options | 20 |
 | make-array of unsupported contents | 18 |
+| backquote | 16 |
 | a list (nil, the empty list, as a sequence) | 11 |
 | uses a function ucl does not have (odddigitp) | 8 |
 | uses a function ucl does not have (adjust-array) | 8 |
@@ -66,6 +67,7 @@ None: every translated case returns the suite's value on ucl.
 | uses a function ucl does not have (complement) | 6 |
 | uses a function ucl does not have (array-unsigned-byte-fill-test-fn) | 6 |
 | a nested list in a vector | 6 |
+| setf of a place other than a variable | 5 |
 | uses a function ucl does not have (flet) | 5 |
 | uses a function ucl does not have (check-values) | 4 |
 | uses a function ucl does not have (break) | 4 |
@@ -75,6 +77,7 @@ None: every translated case returns the suite's value on ucl.
 | a call of a non-symbol | 2 |
 | uses a function ucl does not have (type-of) | 2 |
 | uses a function ucl does not have (subseq-list.4-body) | 1 |
+| uses a function ucl does not have (vector) | 1 |
 | uses a function ucl does not have (subseq-vector.1-body) | 1 |
 | uses a function ucl does not have (subseq-vector.5-body) | 1 |
 | uses a function ucl does not have (subseq-list.6-body) | 1 |
@@ -90,6 +93,5 @@ None: every translated case returns the suite's value on ucl.
 | uses a function ucl does not have (subseq-vector.2-body) | 1 |
 | uses a function ucl does not have (numberp) | 1 |
 | uses a function ucl does not have (subseq-vector.3-body) | 1 |
-| uses a function ucl does not have (length) | 1 |
 | uses a function ucl does not have (subseq-bit-vector.2-body) | 1 |
 | uses a function ucl does not have (subseq-string.1-body) | 1 |

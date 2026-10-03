@@ -2,7 +2,8 @@
 ;; The ANSI Common Lisp test suite (ansi-test.common-lisp.dev, Paul F. Dietz,
 ;; MIT licence) as ucl tests (README §4.2, I46).
 ;;
-;;   bb ucl/ansi/translate.clj
+;;   bb ucl/ansi/translate.clj          the sequence functions (§4.2)
+;;   bb ucl/ansi/translate.clj loop     LOOP (§4.3): ansi_loop_test.cljc, REPORT-loop.md
 ;;
 ;; Fetches the suite at a pinned commit into ucl/out/ansi-test, reads the
 ;; files for the built sequence functions, and translates each test whose
@@ -22,7 +23,7 @@
 (def root (str (fs/parent (fs/parent (fs/absolutize *file*)))))   ; ucl/
 (def suite (str root "/out/ansi-test"))
 
-(def files
+(def sequence-files
   ["sequences/count.lsp" "sequences/count-if.lsp" "sequences/count-if-not.lsp"
    "sequences/find.lsp" "sequences/find-if.lsp" "sequences/find-if-not.lsp"
    "sequences/position.lsp" "sequences/position-if.lsp" "sequences/position-if-not.lsp"
@@ -31,6 +32,19 @@
    "data-and-control-flow/notany.lsp" "data-and-control-flow/notevery.lsp"
    "sequences/fill.lsp" "sequences/replace.lsp" "sequences/copy-seq.lsp" "sequences/subseq.lsp"
    "sequences/reverse.lsp" "sequences/nreverse.lsp" "sequences/sort.lsp" "sequences/stable-sort.lsp"])
+
+(def suites
+  {"sequences" {:files sequence-files
+                :ns "ucl.ansi-sequences-test" :out "ansi_sequences_test.cljc"
+                :report "REPORT.md" :title "ucl's sequence functions" :section "§4.2, I46"}
+   "loop"      {:files (into ["iteration/loop.lsp"]
+                             (map #(str "iteration/loop" % ".lsp") (range 1 18)))
+                :ns "ucl.ansi-loop-test" :out "ansi_loop_test.cljc"
+                :report "REPORT-loop.md" :title "ucl/loop" :section "§4.3, I34"}})
+
+(def suite-name (or (first *command-line-args*) "sequences"))
+(def the-suite (or (get suites suite-name) (throw (ex-info (str "no suite " suite-name) {}))))
+(def files (:files the-suite))
 
 (defn fetch! []
   (when-not (fs/exists? (str suite "/.git"))
@@ -112,6 +126,7 @@
                   \# (let [d (next*)]
                        (case d
                          \' (list 'function (form))
+                         \: (atom* (token))
                          \( (let [xs (form-list)] {:vector xs})
                          \\ (let [ch (next*) more (token)] (unsupported "character"))
                          \* (do (token) (unsupported "bit vector"))
@@ -154,6 +169,8 @@
   {'identity 'identity, 'evenp 'even?, 'oddp 'odd?, 'not 'not, 'null 'nil?, (symbol "1+") 'inc, (symbol "1-") 'dec,
    'zerop 'zero?, 'plusp 'pos?, 'minusp 'neg?, '+ '+, '- '-, '* '*, '< '<, '> '>, '<= '<=,
    '>= '>=, '= '==, (symbol "/=") 'not=, 'max 'ucl/max, 'min 'ucl/min,
+   ;; on a vector, as LOOP's tests use them
+   'aref 'ucl/elt, 'elt 'ucl/elt, 'length 'ucl/length, 'mod 'mod,
    ;; on what the translated cases hold -- numbers, keywords, nil -- Clojure's
    ;; = is eql (tests may use anything; solutions may not)
    'eql '=, 'eq '=, 'eqt '=, 'equal '=, 'equalt '=, 'equalp '=})
@@ -162,6 +179,22 @@
                'function 'quote 'values 'locally 'declare})
 
 (declare tr)
+
+;; LOOP's clause syntax passes through as written: its keywords are symbols,
+;; the type after of-type and the name after named, into or using are not
+;; evaluated; every other form is translated.
+(def loop-raw-after #{'of-type 'named 'into 'using})
+
+(defn tr-loop [[_ & clauses]]
+  (loop [cs clauses out [] raw? false]
+    (if (empty? cs)
+      (list* 'ucl/loop out)
+      (let [[c & more] cs]
+        (cond
+          raw? (recur more (conj out (if (seq? c) (apply list c) c)) false)
+          (= c 't) (recur more (conj out true) false)
+          (symbol? c) (recur more (conj out c) (contains? loop-raw-after c))
+          :else (recur more (conj out (tr c)) false))))))
 
 (defn tr-symbol-data
   "A quoted symbol is data: a keyword, which eql compares as Common Lisp
@@ -330,12 +363,19 @@
         locally (let [body (remove #(and (seq? %) (= 'declare (first %))) (rest f))]
                   (if (next body) (list* 'do (map tr body)) (tr (first body))))
         signals-error (skip "an error test")
+        loop (tr-loop f)
+        block (list* 'ucl/block (second f) (map tr (nnext f)))
+        return (list* 'ucl/return (map tr (rest f)))
+        return-from (list* 'ucl/return-from (second f) (map tr (nnext f)))
+        setq (let [pairs (partition 2 (rest f))]
+               (when-not (every? (comp symbol? first) pairs) (skip "setq of a non-symbol"))
+               (list* 'ucl/setf (mapcat (fn [[v x]] [v (tr x)]) pairs)))
         (if (symbol? h) (tr-call f) (skip "a call of a non-symbol"))))
     :else (skip (str "the datum " (pr-str f)))))
 
 (defn tr-expected-1 [v]
   (let []
-    (cond (or (number? v) (nil? v)) v
+    (cond (or (number? v) (nil? v) (keyword? v)) v
           (= v 't) true
           (symbol? v) (tr-symbol-data v)
           (and (seq? v) (= 'quote (first v))) (tr-expected-1 (second v))
@@ -460,13 +500,13 @@
                                                                             (first (str/split m #"\. ")))}
                                        {:name (:name r) :held k :detail m :case (:case r)})))
                                  rs)]))
-        out (str root "/test/ucl/ansi_sequences_test.cljc")]
+        out (str root "/test/ucl/" (:out the-suite))]
     (spit out
           (str ";; GENERATED by ucl/ansi/translate.clj from the ANSI Common Lisp test suite\n"
                ";; (ansi-test.common-lisp.dev, commit " commit "; Copyright 2004 Paul F. Dietz,\n"
                ";; MIT licence). Do not edit: change the translator and run it again.\n"
                ";; Each case keeps its ansi-test name; ucl/ansi/REPORT.md lists what was skipped.\n"
-               "(ns ucl.ansi-sequences-test\n"
+               "(ns " (:ns the-suite) "\n"
                "  (:require [ucl.test :refer [deftest is testing]]\n"
                "            [ucl.api :as ucl]))\n\n"
                "(defn contents\n"
@@ -480,10 +520,12 @@
           done  (reduce + (map #(count (filter (fn [r] (and (:case r) (not (:held r)))) (second %))) per-file))
           held  (for [[f rs] per-file r rs :when (:held r)] [f r])
           reasons (frequencies (for [[_ rs] per-file r rs :when (:skip r)] (reason-class (:skip r))))]
-      (spit (str root "/ansi/REPORT.md")
-            (str "# The ANSI test suite on ucl's sequence functions\n\n"
-                 "Generated by `bb ucl/ansi/translate.clj` from ansi-test commit `" commit "`\n"
-                 "(README §4.2, I46). A translated case runs on the four hosts and, through\n"
+      (spit (str root "/ansi/" (:report the-suite))
+            (str "# The ANSI test suite on " (:title the-suite) "\n\n"
+                 "Generated by `bb ucl/ansi/translate.clj"
+                 (when (not= "sequences" suite-name) (str " " suite-name))
+                 "` from ansi-test commit `" commit "`\n"
+                 "(README " (:section the-suite) "). A translated case runs on the four hosts and, through\n"
                  "`ucl/conformance.clj`, on SBCL and ECL. A skipped case needs what ucl does not\n"
                  "have -- mostly lists, strings and characters -- or is an error test.\n\n"
                  "**" done " of " total " tests translated.**\n\n"

@@ -74,6 +74,18 @@
                                                     (first args)))
              ") " (str/join " " (map cl (rest args))) ")")
         (= 'declare h) (pr-str f)
+        ;; LOOP's clauses: a keyword is a symbol, as written; what follows
+        ;; of-type, named, into and using is not evaluated
+        (and (symbol? h) (= "ucl" (namespace h)) (= "loop" (name h)))
+        (loop [as args out ["loop"] raw? false]
+          (if (empty? as)
+            (str "(" (str/join " " out) ")")
+            (let [[a & more] as]
+              (cond
+                raw? (recur more (conj out (pr-str a)) false)
+                (and (symbol? a) (nil? (namespace a)))
+                (recur more (conj out (str a)) (contains? #{"of-type" "named" "into" "using"} (str a)))
+                :else (recur more (conj out (cl a)) false)))))
         (and (symbol? h) (nil? (namespace h)))
         (if (contains? clojure->cl h)
           (str "(" (str/join " " (cons (clojure->cl h) (map cl args))) ")")

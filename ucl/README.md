@@ -1415,6 +1415,11 @@ Found while building `ucl/loop` (SBCL 2.2.9, ECL 21.2.1):
   Declared `(signed-byte 53)` they disagree: SBCL signals a type error, its
   start not being of the type, even when values come; ECL returns its own
   `most-negative-fixnum`.
+- **H66** — ClojureDart compiles a `loop` that never recurs, in expression
+  position, to a `do`/`while` whose result local (`loop$1`) is declared inside
+  the block and read after it: "Undefined name 'loop$1'". An exit can leave a
+  loop so: `(ucl/loop (ucl/return :a))`. The block compiler writes such a loop
+  as a `let`. Found by the ANSI suite's `sloop.1`.
 
 Found by the native bulk-operation measurement (§9.13; Node 24.16.0, Dart 3.13.5):
 
@@ -1542,6 +1547,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I31 | A `maximize`/`minimize` declared `fixnum` -- default or `into` -- starts at `ucl/most-negative-fixnum`/`most-positive-fixnum` with no flag, as SBCL and ECL (H65), through the backend's `max`/`min` (I6: `Math.max` for an expression); untyped it keeps the first-value flag; declared `(signed-byte 53)` it is rejected (D60) | §9.14: the ternary and the flag were 121's cost on V8 |
 | I32 | A form `ucl/loop` evaluates once (a limit, a step, an `across` vector) is bound to a local only when it is neither a literal nor a symbol the loop's own code assigns | aliasing a vector V8 also sees by name cost 2762 ≈15% (§9.14); only the loop's code can assign a variable while it runs |
 | I33 | A count from an integer `c` by 1, with no limit, beside an `across` is that index plus `c` -- no counter of its own -- unless `finally` or another `for` clause reads it | it steps in lockstep with the index; there the order of steps would show |
+| I34 | `ucl/ansi/translate.clj loop` turns the ANSI test suite's LOOP files (`iteration/loop*.lsp`) into `test/ucl/ansi_loop_test.cljc`, conformance cases (D60), with `ucl/ansi/REPORT-loop.md` listing every skip: clause syntax passes as written (the type after `of-type`, a name after `named`/`into`/`using`), `return`/`return-from`/`block`/`setq` map to ucl's, `aref`/`elt`/`length` to `ucl/elt`/`ucl/length`. `nil` as a `for`/`with` variable binds a value nothing reads (CLHS 6.1.1.7) | the sequence functions' translator (I46) with a second file list: 65 of the 743 tests translate, and all pass on the four hosts and round-trip through SBCL and ECL |
 | I40 | D45 per operation (§9.13): JS `fill` is `.fill` (either container); JS `replace` and Dart `replace` copy natively when both vectors are typed (`set`/`setRange`, checked at run time), else loop; `subseq`/`copy-seq` are `.slice`/`.sublist`; `sort`/`stable-sort` expand to one shared bottom-up merge sort with the predicate inlined, except JS with `<` (or `#'<`) on a `fixnum-vector`/`sb53-vector` that is a typed array at run time, which calls the native sort; Dart `fill` and everything on the JVM expand to loops | the measurement: native wins only where it copies memory or sorts typed numbers without a comparator; a run-time `ArrayBuffer.isView` check because a declared `fixnum-vector` may be a plain `Array` (H70) |
 | I41 | A sequence function's registry entry applies only to a call through a namespace other than Clojure's own, with every argument: entries are keyed by bare name, and `(count v)` or `(reduce + xs)` in a `ucl/let` body is Clojure's. A curried form is a function value, bound, not tailed | the walker and D35 must not expand Clojure's namesakes; clients always use the alias (D25) |
 | I42 | A literal `fn`'s body is written into the loop with its continuation -- the `if` of a test, the `recur` of a fold -- pushed into the tail of its `let`s and `do`s, unless a name the body binds occurs in the continuation's code; then the body stays an expression | written as it is, an `if` test or a `recur` argument ending in `let` is an expression-position `let`: an IIFE per element on Squint (H22) |
@@ -1735,11 +1741,11 @@ backend selection by source root; mutable host collections only.
     (I25). Exit from a statement, or test with `thereis`/`always`/`never`.
   - `across` waits for strings and characters in the contract.
   - Hash-table iteration order differs on the JVM (D58).
-  - More conformance cases: the ANSI test suite (Paul Dietz;
-    ansi-test.common-lisp.dev, MIT-style licence) has 743 LOOP tests with
-    their expected values, by CLHS section; those within D53 -- most of
-    `loop10.lsp`'s 101 numeric accumulations -- could be imported as
-    conformance cases.
+  - The ANSI test suite's 743 LOOP tests (I34): 65 run as conformance cases.
+    The rest need lists (`collect`, `for … in`: about 400), are error or
+    `macrolet` tests, or exit from a binding's init -- `with x = (return t)`,
+    which D55 rejects; its message names the generated `let`, not the
+    `with` the user wrote (D61 asks for the latter).
 - **No JMH.** JVM numbers rest on simple shapes.
 - **The repository split** (`ucl`, `ucl-jvm`, `ucl-cljs`, `ucl-squint`) is laid
   out, not performed.
