@@ -24,6 +24,7 @@
    :tags?         false
    :key-literal   identity                   ; keywords are strings already
    :key-runtime   identity
+   :key-out       identity
    :vector-reads? false
    :check-arity?  false
    :cells?        false

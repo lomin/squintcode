@@ -83,8 +83,12 @@
   (testing "not built yet (§13)"
     (signals? #"loop-finish is not built yet" (ucl/loop for x across [1] loop-finish))
     (signals? #"loop-finish is not built yet" (ucl/loop for x across [1] do (when x (loop-finish))))
-    (signals? #"hash-table iteration is designed \(D58\) but not built yet"
-              (ucl/loop for k being the hash-keys of h sum k))
+    (signals? #"package iteration needs packages, which ucl does not have \(D53\)"
+              (ucl/loop for s being the symbols of p count s))
+    (signals? #"for k being the hash-keys: expected in or of"
+              (ucl/loop for k being the hash-keys h sum k))
+    (signals? #"expected using \(hash-value var\)"
+              (ucl/loop for k being the hash-keys of h using (hash-key v) sum k))
     (signals? #"parallel stepping\) is not built yet"
               (ucl/loop for x across [1] and y across [2] sum x))))
 (deftest sequence-function-keys-test

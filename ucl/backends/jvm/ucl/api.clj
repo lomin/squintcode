@@ -86,6 +86,11 @@
   [k]
   (if (instance? Integer k) (long ^Integer k) k))
 
+(defn hash-next
+  "The next entry of a table's entry iterator, or nil at its end (D58)."
+  [^java.util.Iterator it]
+  (when (.hasNext it) (.next it)))
+
 (defn check-number [x]
   (if (number? x)
     x
@@ -322,6 +327,11 @@
               (fn [n {:keys [element adjustable?] :as spec}]
                 (vary-meta (make-vector s n spec) assoc
                            :tag (if adjustable? `ArrayList (type-tags [:vector element]))))}
+     :hash-iter {:start (fn [h] (vary-meta (list '.iterator (list '.entrySet (hinted h `Map)))
+                                            assoc :tag 'java.util.Iterator))
+                 :next  (fn [it] (list `hash-next it))
+                 :key   (fn [e] (list '.getKey (hinted e 'java.util.Map$Entry)))
+                 :value (fn [e] (list '.getValue (hinted e 'java.util.Map$Entry)))}
      :gethash {:read-once? true
                :read  (fn [[k h d] [sk]]
                         (if (some? d)

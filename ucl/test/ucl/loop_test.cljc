@@ -134,6 +134,30 @@
                        do (ucl/loop for j from 1 to 3
                                     do (when (== 5 (+ i j)) (ucl/return-from outer (+ i j)))))))))
 
+(deftest hash-table-conformance-test
+  ;; the order of iteration is unspecified (D58): each case gives the same
+  ;; value in any order
+  (testing "hash-keys and hash-values, each or the, in or of"
+    (is (= 6 (ucl/loop for k being the hash-keys of (ucl/make-hash-table :initial-contents {1 10 2 20 3 30}) sum k)))
+    (is (= 60 (ucl/loop for v being each hash-value in (ucl/make-hash-table :initial-contents {1 10 2 20 3 30}) sum v)))
+    (is (= 0 (ucl/loop for k being the hash-keys of (ucl/make-hash-table) count true))))
+  (testing "using the other half of the entry"
+    (is (= 140 (ucl/loop for k being the hash-keys of (ucl/make-hash-table :initial-contents {1 10 2 20 3 30})
+                         using (hash-value v) sum (* k v))))
+    (is (= 140 (ucl/loop for v being the hash-values of (ucl/make-hash-table :initial-contents {1 10 2 20 3 30})
+                         using (hash-key k) sum (* k v)))))
+  (testing "keys come back as they went in"
+    (is (= 2 (ucl/loop for k being the hash-keys of (ucl/make-hash-table :initial-contents {:a 1 :b 2})
+                       count (or (= k :a) (= k :b)))))
+    (is (= 3 (ucl/let ((h (ucl/make-hash-table)))
+               (ucl/dotimes (i 3) (ucl/setf (ucl/gethash i h) (* i i)))
+               (ucl/loop for k being the hash-keys of h using (hash-value v) count (== v (* k k)))))))
+  (testing "beside other clauses"
+    (is (= 2 (ucl/loop for k being the hash-keys of (ucl/make-hash-table :initial-contents {1 10 2 20 3 30})
+                       for i from 0 maximize i)))
+    (is (= true (ucl/loop for v being the hash-values of (ucl/make-hash-table :initial-contents {1 10 2 20})
+                          always (> v 5))))))
+
 (deftest simple-loop-conformance-test
   (testing "(loop form*) runs until return"
     (is (= 4 (ucl/let ((n 0)) (ucl/loop (ucl/incf n) (when (> n 3) (ucl/return n))))))))
@@ -146,5 +170,8 @@
     (is (== 6 (ucl/let ((s (ucl/loop for x across (arr [1 2 3]) sum x)))
                 (declare (type fixnum s))
                 s))))
+  (testing "the hash-table kernel: LeetCode 1512's shape"
+    (is (== 4 (k/count-pairs-of-equals (arr [1 2 3 1 1 3]))))
+    (is (== 0 (k/count-pairs-of-equals (arr [])))))
   (testing "Clojure's own loop is untouched"
     (is (== 3 (loop [i 0] (if (< i 3) (recur (inc i)) i))))))

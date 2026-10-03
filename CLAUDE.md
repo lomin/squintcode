@@ -99,7 +99,8 @@ Rules:
   `(slot-value obj 'slot)`, `setf`, `incf`, `decf`, `min`, `max`,
   `(let ((var init)…) (declare …) …)`, `let*`, `(dotimes (i n [result]) …)`,
   `(loop clause…)` (Common Lisp's LOOP for vectors and numbers: `for … across`,
-  `for … from/below/to/by`, `sum`/`count`/`maximize`/`minimize` `[into v
+  `for … from/below/to/by`, `for k being the hash-keys of h [using (hash-value v)]`,
+  `sum`/`count`/`maximize`/`minimize` `[into v
   of-type T]`, `when`/`unless`/`else`, `while`/`until`/`repeat`, `always`/`never`/
   `thereis`, `with`, `finally`; no list clauses), `(block name …)`,
   `(return-from name [v])`, `(return [v])` (`dotimes` is a block

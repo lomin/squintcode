@@ -116,6 +116,11 @@
                          (list 'new 'js/Map ((:array-literal flavor)
                                              (mapv (fn [[k v]] ((:array-literal flavor) [k v])) pairs)))
                          (list 'new 'js/Map)))}
+     ;; iterating a table (D58): its entries iterator; an entry is [key value]
+     :hash-iter {:start (fn [h] (list '.entries h))
+                 :next  (fn [it] (list (api 'hash-next) it))
+                 :key   (fn [e] ((:key-out flavor) (list 'aget e 0)))
+                 :value (fn [e] (list 'aget e 1))}
      :slot {:read-once? true
             :read (fn [[o slot] _] (list (symbol (str ".-" slot)) o))
             :write-once? true
@@ -253,6 +258,11 @@
        (let [~'v (.get ~'m ~'k)] (if (~'undefined? ~'v) ~'d ~'v)))
 
      (defn ~'puthash [~'k ~'m ~'v] (.set ~'m ~'k ~'v) ~'v)
+
+     (defn ~'hash-next
+       "The next [key value] of a Map's entries iterator, or nil at its end (D58)."
+       [~'it]
+       (let [~'r (.next ~'it)] (if (.-done ~'r) nil (.-value ~'r))))
 
      (defn ~'fail [~'msg] (throw (js/Error. (str "ucl: " ~'msg))))
 

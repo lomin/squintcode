@@ -206,6 +206,10 @@
      :seq {:length (fn [x] (list '.-length x))
            :push (fn [x v _] (list (rt (if checked? 'push-checked 'push)) x v))}
      :vector {:make (fn [n spec] (make-vector n spec))}
+     :hash-iter {:start (fn [h] (list (rt 'hash-iterator) h))
+                 :next  (fn [it] (list (rt 'hash-next) it))
+                 :key   (fn [e] (list (rt 'entry-key) e))
+                 :value (fn [e] (list (rt 'entry-value) e))}
      :gethash {:read-once? true
                :read (fn [[k h d] _]
                        (if (some? d)

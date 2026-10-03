@@ -45,6 +45,16 @@
 
 (defn make-hash-table ^Map [] (Map))
 
+(defn hash-iterator ^Iterator [^Map m] (.-iterator (.-entries m)))
+
+(defn hash-next
+  "The next entry of a table's entry iterator, or nil at its end (D58)."
+  ^MapEntry? [^Iterator it]
+  (if (.moveNext it) (.-current it) nil))
+
+(defn entry-key [^MapEntry e] (.-key e))
+(defn entry-value [^MapEntry e] (.-value e))
+
 (defn get-or-default [k ^Map m d]
   (let [v (. m "[]" k)]
     (if (or (some? v) (.containsKey m k)) v d)))

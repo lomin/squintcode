@@ -153,3 +153,12 @@
   "nsubstitute-if in place."
   (declare (type fixnum-vector nums))
   (ucl/nsubstitute-if 0 (fn [x] (< x 0)) nums))
+
+(ucl/defun count-pairs-of-equals (xs)
+  "Hash-table iteration (D58): count each value, then sum n(n-1)/2 over the
+   counts -- LeetCode 1512's shape."
+  (declare (type fixnum-vector xs))
+  (let [freq (ucl/make-hash-table)]
+    (ucl/loop for x across xs do (ucl/incf (ucl/gethash x freq 0)))
+    (ucl/loop for n being the hash-values of freq
+              sum (quot (* n (- n 1)) 2) of-type fixnum)))

@@ -13,10 +13,12 @@
   {:array-literal (fn [items] (cons 'array items))
    :local-tag     (fn [env sym] (get-in env [:locals sym :tag]))
    :tags?         true
-   ;; ClojureScript keywords have no stable identity (H14): a js/Map must be
-   ;; keyed by the keyword's name, as Squint's keywords already are.
-   :key-literal   (fn [k] (if (keyword? k) (subs (str k) 1) k))
+   ;; ClojureScript keywords have no stable identity (H14): a js/Map is keyed
+   ;; by the keyword's name, marked as ClojureScript marks one (\uFDD0), so
+   ;; that iterating gives the keyword back (D58)
+   :key-literal   (fn [k] (if (keyword? k) (str "\uFDD0" (subs (str k) 1)) k))
    :key-runtime   (fn [k] (list 'ucl.api/hash-key k))
+   :key-out       (fn [k] (list 'ucl.api/hash-unkey k))
    :vector-reads? true
    :check-arity?  true
    :cells?        true

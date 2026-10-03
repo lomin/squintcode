@@ -74,6 +74,16 @@
                                                     (first args)))
              ") " (str/join " " (map cl (rest args))) ")")
         (= 'declare h) (pr-str f)
+        (= 'ucl/dotimes h)
+        (let [[[v n & result] & body] args]
+          (str "(dotimes (" (cl v) " " (cl n) (apply str (map #(str " " (cl %)) result)) ") "
+               (str/join " " (map cl body)) ")"))
+        ;; Common Lisp has no table literal: fill a fresh table
+        (and (= 'ucl/make-hash-table h) (= :initial-contents (first args)))
+        (let [g (str (gensym "table"))]
+          (str "(let ((" g " (make-hash-table))) "
+               (str/join " " (for [[k v] (second args)] (str "(setf (gethash " (cl k) " " g ") " (cl v) ")")))
+               " " g ")"))
         ;; LOOP's clauses: a keyword is a symbol, as written; what follows
         ;; of-type, named, into and using is not evaluated
         (and (symbol? h) (= "ucl" (namespace h)) (= "loop" (name h)))

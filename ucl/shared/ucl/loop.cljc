@@ -138,10 +138,33 @@
                   "Use for " v " across a vector.")
              form)
 
-      (contains? #{"being" "each" "the"} p)
-      (fail! (str "for " v " being ...: hash-table iteration is designed (D58) but not built yet; "
-                  "package iteration needs packages, which ucl does not have (D53).")
-             form)
+      (= "being" p)
+      ;; for v being {each|the} {hash-key|hash-keys|hash-value|hash-values}
+      ;;   {in|of} table [using ({hash-value|hash-key} other)]  (6.1.2.1.6)
+      (let [i (if (kw? (get ts (inc i)) #{"each" "the"}) (+ i 2) (inc i))
+            what (kw (get ts i))
+            _ (when-not (contains? #{"hash-key" "hash-keys" "hash-value" "hash-values"} what)
+                (fail! (str "for " v " being " (pr-str (get ts i)) ": "
+                            (if (contains? #{"symbol" "symbols" "present-symbol" "present-symbols"
+                                             "external-symbol" "external-symbols"} what)
+                              "package iteration needs packages, which ucl does not have (D53)."
+                              "expected hash-keys or hash-values"))
+                       form))
+            _ (when-not (kw? (get ts (inc i)) #{"in" "of"})
+                (fail! (str "for " v " being the " what ": expected in or of") form))
+            table (get ts (+ i 2))
+            i (+ i 3)
+            keys? (contains? #{"hash-key" "hash-keys"} what)
+            [other i] (if (kw? (get ts i) #{"using"})
+                        (let [u (get ts (inc i))]
+                          (when-not (and (seq? u) (= 2 (count u)) (symbol? (second u))
+                                         (kw? (first u) (if keys? #{"hash-value"} #{"hash-key"})))
+                            (fail! (str "for " v ": expected using (" (if keys? "hash-value" "hash-key")
+                                        " var), found " (pr-str u))
+                                   form))
+                          [(second u) (+ i 2)])
+                        [nil i])]
+        [{:kind :hash :var v :type type :table table :keys? keys? :other other} i])
 
       :else (fail! (str "for " v ": expected from, to, below, =, across ..., found " (pr-str (get ts i)))
                    form))))
@@ -347,7 +370,7 @@
             acc   (when (seq anon) (gensym "acc"))
             ;; the symbols the loop's own code assigns
             assigned (contract/assigned-vars backend
-                                             (set (filter symbol? (mapcat (fn [c] [(:from c) (:limit c) (:by c) (:vector c)]) fors)))
+                                             (set (filter symbol? (mapcat (fn [c] [(:from c) (:limit c) (:by c) (:vector c) (:table c)]) fors)))
                                              (rest form))
             acc-type (when acc
                        (if (every? #(= :count (:kind %)) anon)
@@ -424,6 +447,24 @@
                             {:onces [] :vars [(:var c)] :init [[(:var c) (:init c)]]
                              :types {(:var c) (when (:type c) (contract/canonical-type (:type c)))}
                              :step [[(:var c) (:then c)]] :test nil}
+                            :hash
+                            ;; the iterator's next entry, nil at the end; the key
+                            ;; and value are read from it at the top of each
+                            ;; iteration, like an across element (D58)
+                            (let [[bs table] (once (:table c) "table" assigned)
+                                  it (gensym "it") e (gensym "entry")
+                                  op (fn [k] (contract/op backend :hash-iter k))
+                                  [kv vv] (if (:keys? c) [(:var c) (:other c)] [(:other c) (:var c)])
+                                  reads (vec (concat (when kv [[kv ((op :key) e)]])
+                                                     (when vv [[vv ((op :value) e)]])))]
+                              {:onces (into bs [it ((op :start) table)])
+                               :vars [e]
+                               :types {}
+                               :init [[e ((op :next) it)]]
+                               :step [[e ((op :next) it)]]
+                               :test (list 'nil? e)
+                               :top reads
+                               :after reads})
                             :across
                             (let [[bs vec] (once (:vector c) "vec" assigned)
                                   len (gensym "len") idx (gensym "i") v (:var c)]
@@ -459,7 +500,9 @@
                                                  (if (zero? k) idx (list '+ idx k)))]]}
                               f))
                           fors' fors))
-            for-names (map :var fors)
+            ;; the names each for clause binds: its variable, and a hash clause's `using` name
+            clause-names (fn [c] (if (:other c) [(:var c) (:other c)] [(:var c)]))
+            for-names (mapcat clause-names fors)
             ;; the epilogue where only some for names are bound yet
             epi-at (fn [bound]
                      (let [unbound (remove (set bound) (filter #(contract/mentions? finally #{%}) for-names))]
@@ -578,8 +621,8 @@
                              pre-loop
                              (reverse (map (fn [f c before i]
                                              ;; at its end test, an across name is not bound yet
-                                             [(assoc f :index i) (if (= :across (:kind c)) before (conj before (:var c)))])
-                                           fors' fors (reductions conj [] for-names) (range))))
+                                             [(assoc f :index i) (if (contains? #{:across :hash} (:kind c)) before (into before (clause-names c)))])
+                                           fors' fors (reductions into [] (map clause-names fors)) (range))))
             prologue (render (concat (when acc [[:bind acc (if acc-sentinel acc-sentinel 0)]])
                                      (when acc-first [[:bind acc-first true]])
                                      (keep (fn [[_ e]] (when (:first e) [:bind (:first e) true])) intos))
