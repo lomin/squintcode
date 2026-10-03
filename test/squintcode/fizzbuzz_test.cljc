@@ -1,10 +1,11 @@
 (ns squintcode.fizzbuzz-test
   (:require [ucl.test :refer [deftest is testing]]
             [ucl.api :as ucl]
-            [squintcode.fizzbuzz :refer [fizzBuzz fizzBuzz2]]))
+            [squintcode.fizzbuzz :refer [fizzBuzz fizzBuzz2]]
+            [squintcode.fizzbuzz-loop :as loop-version]))
 
 (deftest fizzbuzz-basic-test
-  (doseq [f [fizzBuzz fizzBuzz2]]
+  (doseq [f [fizzBuzz fizzBuzz2 loop-version/fizzBuzz]]
     (testing "FizzBuzz with n=15"
       (let [result (f 15)]
         (is (= 15 (ucl/length result)) "Should return 15 elements")
@@ -17,7 +18,7 @@
         (is (= "FizzBuzz" (ucl/elt result 14)) "15 should be 'FizzBuzz'")))))
 
 (deftest fizzbuzz-edge-cases
-  (doseq [f [fizzBuzz fizzBuzz2]]
+  (doseq [f [fizzBuzz fizzBuzz2 loop-version/fizzBuzz]]
     (testing "FizzBuzz with n=1"
       (let [result (f 1)]
         (is (= 1 (ucl/length result)))
