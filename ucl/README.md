@@ -11,10 +11,14 @@ assignable parameters and `ucl/dotimes`, so that a loop's state needs neither
 `recur` arguments nor an IIFE (§4.1, D29–D37, I10–I13, H34–H38). The terms are
 in [GLOSSARY.md](./GLOSSARY.md).
 
+**ClojureDart** (2026-10-03, a third grilling session): a fourth host, for
+tests and for LeetCode's Dart submissions -- standalone Dart, no ClojureDart
+runtime (§3, §5, §7, §9.9, D38–D42, I14–I21, H39–H53).
+
 ```bash
-ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint
-bb test                    # that, then every solution on all three hosts
-bb build                   # LeetCode submissions: Squint, safety 0
+ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint, ClojureDart
+bb test                    # that, then every solution on all four hosts
+bb build                   # LeetCode submissions: JavaScript (Squint) and Dart, safety 0
 ```
 
 This document is the design of record. It says what `ucl` is, the rules every
@@ -22,15 +26,15 @@ decision is measured against, each decision and what decided it, the
 measurements behind them, what was rejected, and what was got wrong on the way.
 Decisions `D1`–`D28` are numbered after the first grilling session's question
 that settled them (a gap is a question folded into another); `D29`–`D37` come
-from the second, on variables.
+from the second, on variables; `D38`–`D42` from the third, on ClojureDart.
 
 ---
 
 ## 1. What it is
 
 `ucl` lets you write **high-performance code once and run it unchanged on every
-host that implements its contract** — today Clojure (JVM), ClojureScript and
-Squint. Its vocabulary is borrowed from Common Lisp, because Common Lisp already
+host that implements its contract** — today Clojure (JVM), ClojureScript,
+Squint and ClojureDart. Its vocabulary is borrowed from Common Lisp, because Common Lisp already
 succeeded at being a standard, its names mostly do not collide with Clojure's,
 and a Common Lisp programmer should find it obvious.
 
@@ -105,12 +109,17 @@ ucl/
   backends/cljs/ucl/api.cljc      ClojureScript flavor + (contract/defapi …)   macro half
   backends/cljs/ucl/api.cljs                                                   run-time half
   backends/squint/ucl/api.cljc    Squint flavor + (contract/defapi …)          one file
+  backends/cljd/ucl/api.cljd      (contract/defapi …) -- macros only (I14)
+  backends/cljd/ucl/dart_emit.cljc  the ClojureDart emit map; macro-host state (I15)
+  backends/cljd/ucl/runtime.cljd  run-time half: typed-list constructors, cells, checks
+  cljd-project/                   the ClojureDart project template builds copy (I16)
   testkit/<host>/ucl/test.*       ucl.test: one test vocabulary on every host (I4)
   testkit/<host>/ucl/leetcode.*   strict ListNode / TreeNode fixtures (D19)
   test/ucl/*_test.cljc            the suite -- byte-identical on every host
-  test/ucl/kernels.cljc           LeetCode-shaped functions; their Squint build must have no IIFE
+  test/ucl/kernels.cljc           LeetCode-shaped functions; their Squint build must have no
+                                  IIFE, their Dart build no ClojureDart runtime (I19)
   test-jvm/ucl/*_test.clj         expansion-error tests (the JVM can expand a form at run time)
-  run-tests.sh                    run it on all three hosts; any failure fails
+  run-tests.sh                    run it on all four hosts; any failure fails
   bench/                          every measurement in this document
   GLOSSARY.md                     the terms: variable, local, place, positions
 ```
@@ -123,6 +132,18 @@ Source roots per host -- exactly one backend each:
 | ClojureScript | `shared` `backends/js` `backends/cljs` `testkit/cljs` |
 | Squint | `shared` `backends/js` `backends/squint` `testkit/squint` |
 | Squint, submission | `shared` `backends/js` `backends/squint` -- never the test kit |
+| ClojureDart | `shared` `backends/cljd` `testkit/cljd` |
+| ClojureDart, submission | `shared` `backends/cljd`, plus `testkit/cljd/ucl/leetcode.cljc` so a bare `ListNode` compiles; the bundler leaves it bare (D39) |
+
+- **ClojureDart's `ucl.api` holds macros only** (I14). ClojureDart expands
+  macros before special forms and emits a bare `let*` inside every fn (H40), so
+  a fn compiled there would expand against ucl's `let*`; the contract's `let*`
+  returns a binding vector unchanged, which ends that expansion. The emit map
+  is `ucl.dart-emit`, the run-time half `ucl.runtime`, which expansions name
+  fully qualified.
+- **The contract defines every fn before its first use.** ClojureDart's
+  `declare` is a no-op on its macro host (H41); the variable walker, which is
+  mutually recursive, is one `walk` whose parts are a `letfn`.
 
 - **A backend is an emit map** (D26). `ucl.contract/defapi` generates every API
   name — arities, docstrings, macro-vs-function behaviour — from the shared
@@ -185,6 +206,7 @@ meaning.
 | `ucl/double-float-positive-infinity` `…-negative-…` | the SBCL/ECL extension names | D23 |
 | `ucl/defun` + `(declare (type …))` | function with type declarations; a parameter the body assigns is a variable | D18, D36 |
 | `ucl/defstruct` `ucl/defmethod` `ucl/with-slots` | classes | D18 |
+| `(ucl/princ-to-string x)` | an integer's decimal digits, or a string itself | I21 |
 
 **Loops are Clojure's own `loop`/`recur`** with `elt`/`length` (D20), plus
 `ucl/dotimes` (D33). They compile to a plain `while` on every host. `aloop` and
@@ -266,12 +288,17 @@ deletion, `ucl/loop`, `aref` (reserved), CLOS `defclass`, `:test 'equal`.
 
 ### Representation (D9, D10)
 
-| `make-array` call | JVM | JS (Squint, ClojureScript) |
-|---|---|---|
-| default, `:element-type t` | `Object[]` | `Array` |
-| `:element-type 'fixnum` | `int[]` | `Int32Array` |
-| `:element-type '(signed-byte 53)` | `long[]` | `Float64Array` |
-| `:adjustable t :fill-pointer k` | `java.util.ArrayList` | `Array` |
+| `make-array` call | JVM | JS (Squint, ClojureScript) | Dart (ClojureDart) |
+|---|---|---|---|
+| default, `:element-type t` | `Object[]` | `Array` | `List<dynamic>` |
+| `:element-type 'fixnum` | `int[]` | `Int32Array` | `Int32List` |
+| `:element-type '(signed-byte 53)` | `long[]` | `Float64Array` | `Int64List` (I17) |
+| `:element-type 'string` | `Object[]` | `Array` | `List<String>` |
+| `:adjustable t :fill-pointer k` | `java.util.ArrayList` | `Array` | growable `List<E>` |
+
+- **`string` exists for Dart** (I21). Dart reifies generic types: LeetCode's
+  harness wants fizzbuzz's `List<String>`, and a `List<dynamic>` of strings is
+  not one. The JVM and JS upgrade it to `t`, as Common Lisp implementations do.
 
 This is Common Lisp's own split: a simple vector is fixed-size and may be
 specialized; only an adjustable vector with a fill pointer accepts
@@ -330,7 +357,12 @@ contract ships, as Common Lisp's own `deftype` would define them:
 | `simple-vector` | `(simple-array t (*))` — Common Lisp's own name |
 
 plus `(or null X)` for a nullable reference. A declaration is a promise: JS
-ignores it; the JVM uses it to emit direct access. On the JVM a nested macro
+ignores it; the JVM uses it to emit direct access; Dart casts to it.
+
+**LeetCode's `int[]` input is a `fixnum-vector`** (D42): a vector of fixnums,
+whatever container the host passes -- a JS `Array`, a Dart `List<int>`.
+Declared `simple-vector`, Dart reads its elements as `dynamic` (§9.9).
+`simple-vector` is for any other input. On the JVM a nested macro
 learns a local's declared class through `&env` (H1).
 
 ## 6. Hash tables and keys (D12, D22)
@@ -351,6 +383,7 @@ time, non-literal keys get the cheapest runtime normalization the host needs —
 | Squint | nothing (keywords are strings) |
 | JVM | `(ucl.api/hash-key k)`: an `Integer` becomes a `long`; skipped for literals and `long`/`String` locals |
 | ClojureScript | `(ucl.api/hash-key k)`: a keyword becomes its name; a literal keyword is its name at compile time |
+| ClojureDart | nothing: a Dart `Map` compares with `==`, an `Int32List` read is an `int`, a keyword is canonical (H47) |
 
 Keys come back out normalized; that matters only once iteration exists.
 
@@ -400,6 +433,18 @@ positional constructor, and `&aux` computes slots from arguments:
   interface, `slot-value` needs no type information at all: no reflection, no
   fallback, no warning (I2). Measured method cost: ≈ 3.5 ns per call more than a
   method inside the `deftype` (§9.4) -- JVM only, a test host.
+- **ClojureDart:** a `deftype`, methods inside the class (D40). A Dart class
+  cannot gain methods once defined, but ClojureDart expands every top-level
+  form of a namespace twice -- macro host, then Dart (H42): in the first pass
+  each `defmethod` records its body, in the second `defstruct` emits every
+  method into the class. The generic function calls the method directly
+  (Dart's dynamic dispatch when two structs share the name). So a method must
+  be defined in its struct's namespace. When a constructor is named like the
+  struct the class is `<Name>_struct`, since ClojureDart turns a call of a
+  class name into `new`. ucl names fields and methods itself: ClojureDart
+  leaves `-` in a `set!` of a field and in method names (H43). A Dart
+  submission's `class NumArray` wraps the struct: its constructor runs the BOA
+  constructor, its methods delegate (D39).
 - **Call constructors as functions** -- `(NumArray nums)` -- in portable code.
   On the JVM, `new` is a special form that reaches the deftype's slot-positional
   constructor, which cannot run a BOA lambda list. `new` is how LeetCode calls,
@@ -427,6 +472,8 @@ calling one without `new` in a strict-mode module throws. So:
     warning (H27);
   - JVM: `deftype*` classes in the **default package**, which every namespace
     resolves by bare name (H28), implementing the per-slot interfaces;
+  - ClojureDart: `deftype`s; the test kit wraps the compiler's resolver so a
+    bare `ListNode` falls back to them (H45);
 - a test namespace requires `ucl.leetcode` before the solution (the JVM must
   have the class before it compiles `new ListNode`);
 - a solution that omits `new` fails the ordinary shared suite: it throws on JS
@@ -451,6 +498,11 @@ means 1:
 | Squint | `{:ucl/safety 0}` in `squint.edn` — Squint copies every key into the macros' `&env` (H5) |
 | ClojureScript | a compiler option, read via `cljs.env/*compiler*` |
 | JVM | the system property `-Ducl.safety=0` |
+| ClojureDart | the same property, read where ClojureDart runs macros -- its JVM macro host (`clojure -J-Ducl.safety=0 -M:cljd …`) |
+
+On ClojureDart, Dart checks every index itself (`RangeError`) at any safety;
+the other checks are `ucl.runtime` helpers like the JS ones. An `Int32List`
+store would wrap silently, so `elt-set-checked` checks the value.
 
 What the checks are, per host:
 
@@ -465,7 +517,7 @@ What the checks are, per host:
 
 Submission builds (`bb build`, `bb build-one`) use 0; tests use the default.
 `ucl/run-tests.sh` compiles the suite at safety 0 as well and fails if any
-check survives.
+check survives (Squint), or if the kernels reach the ClojureDart runtime.
 ClojureScript caches compiled namespaces, and changing the setting does not
 invalidate that cache — clean before switching (the `bb` tasks do).
 
@@ -652,6 +704,45 @@ measured 74 and 88 ms (flat) and 96 and 70 ms (variables, shrink first) on
 `ucl/dotimes` against the same loop written with `loop`/`recur` (412 fizzBuzz,
 n=10⁴): identical JavaScript, 43–46 µs both (D33, §15).
 
+### 9.9 Dart (`bench/dart/`)
+
+Dart SDK 3.13.5, arm64; median of 7–9 rounds after warm-up, each variant in
+its own process; JIT is `dart run`, AOT `dart compile exe`.
+
+**On LeetCode** (2026-10-03):
+
+| submission | runtime | beats |
+|---|---|---|
+| 412 fizzbuzz, ucl | 3 ms | 76% |
+| 412 fizzbuzz, ucl, untyped `class Solution` (D39) | 3 ms | 76% |
+| 412 fizzbuzz, hand-written | 2 ms | 100% |
+| 2762, ucl (`simple-vector` input, before D42) | 473 ms | 100% |
+| 2762, hand-written | 487 ms | 100% |
+
+LeetCode's Dart runtime is mostly its harness (~470 ms for 2762); it cannot
+see the differences below. fizzbuzz's 2 against 3 ms is its 1 ms resolution:
+locally all fizzbuzz variants -- ucl, `%` for `.remainder`, a typed `int`
+parameter, hand-written -- measure 67–79 µs (n=10⁴), dominated by `toString`.
+
+**Casts on `dynamic` parameters** (H25, `casts.dart`, a 10⁵-element sum): 75.3
+against 75.2 µs JIT, 71.1 against 71.7 µs AOT. The VM removes them.
+
+**LeetCode 2762, n=10⁵** (values 1..5), ms per call -- the ucl build, then one
+difference to hand-written Dart removed at a time:
+
+| build | JIT | AOT |
+|---|---|---|
+| ucl, `nums` declared `simple-vector` | 2.02 | 3.99 |
+| …each `IntCell` replaced by an `int` local | 1.98 | 4.39 |
+| …plus `nums` read as `List<int>` | 1.91 | 3.25 |
+| …plus `&&` for ClojureDart's `and` (H48) | **1.55** | **3.03** |
+| hand-written | 1.62–1.67 | 2.89–2.98 |
+| **ucl, `nums` declared `fixnum-vector` (D42)** | **1.93** | **3.15** |
+
+Cells cost nothing (the VM removes a non-escaping one). Element type costs
+≈25% AOT -- D42 removed it. ClojureDart's `and` in a loop test costs ≈18% JIT;
+it is recorded, not worked around (§13).
+
 ## 10. Host facts
 
 Everything here was established by compiling and running, not by reading docs.
@@ -781,6 +872,58 @@ Found while adding variables (Squint 0.14.211, ClojureScript 1.12.42, Clojure
   makes Clojure compile callers as a primitive invoke (`IFn$OLO`) that the
   protocol function does not implement: `ClassCastException` at the call.
 
+Found while adding ClojureDart (`247b3c2`, Dart 3.13.5):
+
+- **H39** — ClojureDart cannot assign a local: `set!` works on a `^:mutable`
+  `deftype` field only ("Cannot assign to non-mutable"). A variable is a cell.
+- **H40** — ClojureDart expands macros before special forms, and its compiler
+  emits a bare `let*` around every fn body. In a namespace that defines a
+  `let*` macro -- `ucl.api` -- every fn expands against it. A macro that returns
+  its `&form` unchanged ends expansion, and the special form compiles.
+- **H41** — ClojureDart's `declare` is a no-op, and its macro host evaluates
+  each `^:macro-support` def as it reads it: a forward reference does not
+  resolve there.
+- **H42** — ClojureDart compiles a namespace in two passes, macro host then
+  Dart, and expands every top-level form in both: in the second, a macro sees
+  what later forms recorded in the first. Its source calls the two passes "a
+  temp hack … at the moment"; ucl's methods depend on it (D40), and the suite
+  breaks loudly if it changes -- the generic function calls a method the class
+  lacks.
+- **H43** — ClojureDart munges `-` in a field read (`prefix_sum`) but not in a
+  `set!` of the field, nor in a `deftype` method's name; a class name must be a
+  Dart identifier.
+- **H44** — `(. a "[]=" i v)` is typed `void`: an assignment cannot be used as a
+  value.
+- **H45** — A bare symbol resolves through the namespace's own defs and its
+  mappings, and `:refer-clojure` maps only `cljd.core`'s fields, never classes.
+  Wrapping `cljd.compiler/resolve-non-local-symbol` on the macro host makes a
+  bare `ListNode` resolve (the test kit's analog of H27).
+- **H46** — ClojureDart compiles `mod` to Dart's `%`, which is Euclidean:
+  `(mod 5 -3)` is 2, Clojure's is -1. `rem` is `.remainder`.
+- **H47** — A ClojureDart vector is a Dart `List` (`[]`, `.length`, `is List`);
+  a keyword literal is a canonical `const` compared with `==`.
+- **H48** — `(and a b)` in a test compiles to a `late final bool` temporary and
+  an `if`, not `&&`: ≈18% on the 2762 kernel under the JIT (§9.9).
+- **H49** — The macro host reads with features `#{:cljd :cljd/clj-host :clj}`,
+  the Dart side with `:cljd` only: `#?(:cljd/clj-host …)` is macro-host code.
+  `clojure.string` through an alias does not resolve on the macro host.
+- **H50** — Every `clojure.core` call ClojureDart does not inline is a call
+  into `cljd/core.dart` (45k lines): `=`, `str`, `count`, `nth`, `get`,
+  `compare`, `int`, `identity`, keyword and vector literals, any seq or
+  persistent-collection fn, multi-arity and variadic fns. Arithmetic, `quot`
+  `rem` `mod` `abs`, comparisons, bit ops, `min`/`max`, `and`/`or`/`not`,
+  `cond`/`case`, `loop`/`recur`, `dotimes`, local `fn`s, `throw` compile inline.
+- **H51** — ClojureDart brackets each top-level definition with `// BEGIN` /
+  `// END` comments and reaches every other one, even in its own library,
+  through an import prefix: a tree shaker needs no Dart parser (D39).
+- **H52** — LeetCode's Dart harness accepts top-level functions beside `class
+  Solution`, `dynamic` method signatures, and a `dart:typed_data` import; a
+  returned `List<String>` passes its check. Its runtime is mostly the harness
+  (§9.9).
+- **H53** — tools.deps deprecates `:paths` outside the project directory, even
+  through a symlink; ClojureDart's compile-error report drops the cause
+  (`cljd-project/report.clj` prints the chain).
+
 ## 11. Decision log
 
 "Evidence" means a measurement or probe decided it; "user judgement" means it
@@ -824,8 +967,13 @@ was decided on reasoning, with the trade-offs on the table.
 | D35 | A compound init of `ucl/let` runs as a statement whose return positions assign the variable | user judgement |
 | D36 | `ucl/defun` / `ucl/defmethod` parameters the body assigns are variables (not the `defmethod` instance) | user judgement |
 | D37 | Terms in `GLOSSARY.md`; decisions stay in this log | user judgement |
+| D38 | ClojureDart is a fourth host for tests **and** LeetCode Dart submissions; a submission is standalone Dart, and a solution may not reach the ClojureDart runtime -- `bb build` fails if it does; the contract grows when a solution needs more (D8) | user judgement, evidence (H50) |
+| D39 | The bundler generates what LeetCode calls, untyped: `class Solution` (one method per function) and, per design problem, a class that runs the BOA constructor and delegates | evidence (H52, §9.9) |
+| D40 | A struct's methods live inside its Dart class, through ClojureDart's two passes | user judgement, evidence (H42) |
+| D41 | The prototype's contract changes ship to all hosts: define before use, `let*` passes a binding vector through, a typed `dotimes` counter | evidence (H40, H41) |
+| D42 | LeetCode's `int[]` input is declared `fixnum-vector`; `simple-vector` is for anything else; ClojureDart's `and` cost is recorded, not worked around | user judgement, evidence (§9.9) |
 
-### Implementation decisions (I1–I9)
+### Implementation decisions (I1–I21)
 
 Made while building v1, not in the grilling session; each is reversible.
 
@@ -837,13 +985,21 @@ Made while building v1, not in the grilling session; each is reversible.
 | I4 | `ucl.test` (`deftest is testing signals-error?`) on every host; on JVM/CLJS it delegates to clojure.test | test files carry no reader conditional -- D5 kept clojure.test, this only names it once |
 | I5 | LeetCode's globals resolve per host: Squint `globalThis`, ClojureScript `cljs.core` names, JVM default-package classes | D19 says `(new ListNode ..)` bare; this is how each host gets there (H27, H28) |
 | I6 | JS `min`/`max`: ternary for symbol/literal arguments, else `Math.min`/`Math.max`; JVM: `:inline` fns | never a `let` (§9.6); one var serves call and value on the JVM |
-| I7 | Solutions declare LeetCode's `number[]` as `simple-vector`; tests build inputs with `make-array` | a declaration is a promise about representation, and LeetCode passes a plain JS Array |
+| I7 | Solutions declare LeetCode's `number[]` as `simple-vector`; tests build inputs with `make-array` -- **superseded by D42** | a declaration is a promise about representation, and LeetCode passes a plain JS Array |
 | I8 | `setf/` deleted with `macros.cljc`; its tests of `aloop`, `aref`, `push-end`, `dict` retired | D27; the `ucl` suite covers the same behaviour under the new names |
 | I9 | Project Squint pinned to 0.14.211; `deps.edn` aliases `:jvm` / `:cljs` select the backend | latest-only rule; backend selection by source root |
 | I10 | `(setf var <compound>)` uses return-position assignment too, on variables only | the 2762 kernel's last IIFE; a variable has no subforms whose evaluation order it could change, an `elt` place has |
 | I11 | A variable is a place kind, `(%var name type)`, which only the walker writes | `setf`/`incf`/`decf` reuse the place machinery: evaluate-once, checks, return values |
 | I12 | `run-tests.sh` fails on an IIFE in `test/ucl/kernels.cljc`'s safety-0 build; `bb build` warns on one in any submission | the claim of D29 is structural; a submission may knowingly bind a `try` |
 | I13 | Expansion errors are tested on the JVM only (`test-jvm/`) | the contract is shared; only the JVM expands a form at test run time |
+| I14 | ClojureDart's `ucl.api` holds macros only; the emit map is `ucl.dart-emit`, the run-time half `ucl.runtime` | H40 |
+| I15 | `dart_emit.cljc` keeps macro-host-only state -- the safety property, the struct and method registry -- under `#?(:cljd/clj-host …)` | H49; the Dart side never needs it |
+| I16 | ClojureDart builds run in a project made from `ucl/cljd-project/`, the sources copied into its `src/`; Dart packages persist between runs | H53 |
+| I17 | `(signed-byte 53)` vectors are `Int64List` on Dart | a `Float64List` reads back `double`, which is not a Dart `int`; `Int64List` holds the whole range exactly |
+| I18 | ClojureDart writes are `(do a[i]=v v)`, write-once only at safety ≥ 1 (a helper) | H44 |
+| I19 | `run-tests.sh` fails if the kernels' safety-0 Dart references `cljd.core` | D38 is structural, like I12 |
+| I20 | The `dotimes` counter is hinted through a `:types :local-hint` op: `int` on Dart, `number` on ClojureScript, nothing on Squint and the JVM | Clojure refuses a hint on a local bound to a primitive literal |
+| I21 | `princ-to-string` and `:element-type 'string` | fizzbuzz on Dart: `str` reaches the runtime (H50), and the result must be a `List<String>` |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -901,6 +1057,24 @@ backend selection by source root; mutable host collections only.
   host.
 - **Parameters immutable, rebound with `ucl/let`** (D36) — one rule fewer, but
   the same code; Common Lisp assigns parameters.
+- **ClojureDart as a test host only** (D38) — the contract would be checked on
+  Dart, but the user wanted Dart submissions too.
+- **Bundling a slice of `cljd/core.dart`** (D38) — a Dart-source tree shaker
+  over a 45k-line protocol-heavy runtime, for calls fast solutions avoid anyway.
+- **A solution that reaches the runtime is simply not built as Dart** (D38) —
+  silent partial coverage.
+- **LeetCode's typed signature in the solution's `ns` metadata, or from an
+  `ftype` declaration** (D39) — LeetCode accepted the untyped wrapper.
+- **Methods as functions per struct with an `is`-dispatching generic** (D40) —
+  the generic is emitted at a name's first `defmethod` and cannot learn of a
+  later struct: two structs sharing a method name would fail on ClojureDart
+  only, a partial host.
+- **Protocols and `extend-type`, as on the JVM** (D40) — dispatch through the
+  ClojureDart runtime, which a submission cannot carry.
+- **Hinting `simple-vector` as `List<int>` on Dart** (D42) — a vector of
+  strings or nodes would fail the cast.
+- **Rewriting `and` for ClojureDart** (D42) — on LeetCode both builds beat
+  100%; `(. a "&&" b)` would also evaluate `b` eagerly if ClojureDart hoists it.
 
 ## 13. Open items
 
@@ -932,12 +1106,20 @@ backend selection by source root; mutable host collections only.
     the hot path; `bb build` reports it.
   - The JVM fixtures accept only the all-slots constructor (`(new ListNode 1
     nil)`, not `(new ListNode 1)`).
-- **The ClojureDart spike predates v1.** `prototypes/ucl-cljd` still runs its
-  own copy of the early contract; a ClojureDart backend for v1 would start from
-  this contract plus the spike's H20–H25.
-- **Not yet shown on ClojureDart:** D12 key normalization, D14 safety via
-  compiler options (where would a ClojureDart macro read it?), D18 classes, D21
-  inline `min`/`max`. The spike covered `elt`, `setf`, `make-array`, `defun`.
+- **ClojureDart limits** (D38–D42):
+  - `and` in a loop test costs ≈18% under the JIT (H48, §9.9); invisible on
+    LeetCode. Revisit if a Dart submission leaves the top 5%.
+  - A method must be defined in its struct's namespace (D40).
+  - Methods depend on ClojureDart's two passes (H42) and `ListNode` on its
+    resolver (H45): undocumented internals, pinned at `247b3c2`.
+  - In a Dart submission: no `&optional` constructor, no keyword constructor
+    (`make-Foo`), and no `ucl/min`/`ucl/max` as a value -- they compile to
+    multi-arity or variadic fns, which are runtime objects (H50). The build
+    says so.
+  - Clojure's `mod` differs on a negative divisor (H46); no solution relies on it.
+  - ClojureDart prints "Useless ^:const" for `most-positive-fixnum`.
+- **`prototypes/ucl-cljd`** is the spike that preceded the backend; it runs its
+  own copy of the early contract.
 - **Squint internals relied on:** `(:var->ident &env)` (H1) and the `defmacro`
   marker (H6). Latest-Squint-only plus the suite makes a break loud.
 - **No JMH.** JVM numbers rest on simple shapes.
@@ -945,6 +1127,9 @@ backend selection by source root; mutable host collections only.
   out, not performed.
 
 ## 14. Validation: ClojureDart, a fourth host
+
+*Superseded by the backend (D38–D42): ClojureDart is now a full host. Kept as
+the record of the question the spike answered.*
 
 `prototypes/ucl-cljd/` is a spike answering one question: can this design
 express `src/squintcode/fizzbuzz.cljc` on ClojureDart — a host it never
@@ -1006,6 +1191,9 @@ was a claim made without compiling or measuring first.
 | Variables grilling: "assignable parameters include `&optional` and `&aux`" (D36) | `ucl/defun`/`ucl/defmethod` take required parameters only (§13). |
 | v1's `defmethod` with a declared `fixnum` parameter | Put `^long` into the protocol signature; every call threw (H38). No solution declared one; the variables suite found it. |
 | The first variables kernel of 2762 | Still had one IIFE: `(setf maxt (loop …))`. Found by the I12 check; fixed by I10. |
+| ClojureDart grilling: "with methods inside the class, a design-problem submission needs no wrapper" | The constructor still does: LeetCode calls `NumArray(nums)`, and the class's own constructor takes the slots. The wrapper delegates (D39). |
+| ClojureDart grilling: "the 2762 Dart build is 20–38% slower than hand-written -- a problem" | Locally, yes; on LeetCode both beat 100% (473 against 487 ms). Its Dart runtime is mostly the harness. |
+| The prototype's typed `dotimes` counter | Overloaded `:hint`'s parameter count with `:local`: the JVM backend would have thrown, and Clojure refuses a hint there anyway. Became `:local-hint` (I20) before it shipped. |
 
 The pattern is unchanged from `setf`: every serious error was an inference made
 where a compile or a measurement would have answered the question.

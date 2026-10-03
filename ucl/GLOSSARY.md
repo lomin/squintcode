@@ -13,8 +13,15 @@ The host-agnostic vocabulary and its meaning; every host implements all of it.
 _Avoid_: core, spec
 
 **Host**:
-A language a ucl program runs on: Squint, ClojureScript or Clojure (JVM).
+A language a ucl program runs on: Squint, ClojureScript, Clojure (JVM) or
+ClojureDart.
 _Avoid_: platform, target, dialect
+
+**Submission**:
+The standalone file a host's build produces for LeetCode: JavaScript from
+Squint, Dart from ClojureDart. It contains the solution and nothing of ucl's
+macro time, test kit or a host's runtime library.
+_Avoid_: bundle, build, artifact
 
 **Backend**:
 A host's implementation of the contract.

@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-LeetCode solutions written once in `.cljc` and run on three hosts:
+LeetCode solutions written once in `.cljc` and run on four hosts:
 
 - **Squint** — compiles to the standalone JavaScript submitted to LeetCode
+- **ClojureDart** — compiles to the standalone Dart submitted to LeetCode
 - **Clojure (JVM)** — a test host
 - **ClojureScript** — a test host and REPL
 
@@ -20,17 +21,18 @@ Build and test are orchestrated by **Babashka** (`bb.edn`, `bb/tasks/lc.clj`).
 ## Commands
 
 ```bash
-bb test              # everything: ucl suite, then solutions on Squint -> Clojure -> ClojureScript
-bb test-ucl          # the ucl library suite on all three hosts (ucl/run-tests.sh)
+bb test              # everything: ucl suite, then solutions on Squint -> Clojure -> ClojureScript -> ClojureDart
+bb test-ucl          # the ucl library suite on all four hosts (ucl/run-tests.sh)
 bb test-squint       # solutions on Squint, bundled exactly as a submission
 bb test-clj          # solutions on Clojure (JVM)
 bb test-cljs         # solutions on ClojureScript -- any compiler WARNING fails the run
+bb test-cljd         # solutions on ClojureDart (cljd.test on `dart test`)
 
-bb build             # every problem -> out/<problem>.js (LeetCode-ready)
+bb build             # every problem -> out/<problem>.js and out/<problem>.dart (LeetCode-ready)
 bb build-one <name>  # one problem, e.g. bb build-one fizzbuzz
 bb clean             # remove out/ and ClojureScript caches
 
-ucl/run-tests.sh [jvm|cljs|squint]   # ucl suite, optionally one host
+ucl/run-tests.sh [jvm|cljs|squint|cljd]   # ucl suite, optionally one host
 ```
 
 REPLs: `clj -M:jvm` (Clojure) or `clj -M:cljs:repl` (ClojureScript). The
@@ -83,12 +85,21 @@ Rules:
   Clojure local is a compile-time error.
 - Use `ucl/min`/`ucl/max`, not `clojure.core`'s: Squint's are slow runtime calls.
 - Numeric equality: `==`, not `=` (Squint's `=` is a deep-equality call).
+- **A solution must compile to plain Dart**: nothing in it may call the
+  ClojureDart runtime, or `bb build` fails naming the call. Fine: arithmetic,
+  `quot` `rem` `mod` (Dart's `%`: wrong for a negative divisor), comparisons, bit ops, `and`/`or`/`not`, `cond`/`case`,
+  `loop`/`recur`, local `fn`s, ucl's vocabulary. Not in a solution: `=`, `str`
+  (use `ucl/princ-to-string`), `count`, `nth`, `get`, keyword or vector
+  literals as values, seq and collection fns, multi-arity fns. Tests may use
+  anything. A result LeetCode types `List<String>` needs `:element-type 'string`
+  (Dart checks generic types).
 - Vocabulary (exact Common Lisp names and argument order): `make-array`, `elt`,
   `length`, `vector-push-extend`, `make-hash-table`, `(gethash key table [default])`,
   `(slot-value obj 'slot)`, `setf`, `incf`, `decf`, `min`, `max`,
   `(let ((var init)…) (declare …) …)`, `let*`, `(dotimes (i n [result]) …)`,
   `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
-  `defmethod`, `with-slots`, `most-positive-fixnum`, `double-float-positive-infinity`.
+  `defmethod`, `with-slots`, `princ-to-string`, `most-positive-fixnum`,
+  `double-float-positive-infinity`.
   Types: `fixnum` (32-bit everywhere), `(signed-byte 53)`, `fixnum-vector`,
   `sb53-vector`, `simple-vector`. Declare a variable's type: on the JVM an
   undeclared one is boxed.
@@ -97,7 +108,8 @@ Rules:
   types its elements `int`, the JVM reads an `int[]`. `simple-vector` is for
   any other input (strings, nodes). Details: `ucl/README.md` §4–§8, terms in
   `ucl/GLOSSARY.md`.
-- Design problems (`NumArray`, `LRUCache`): `ucl/defstruct` + `ucl/defmethod`.
+- Design problems (`NumArray`, `LRUCache`): `ucl/defstruct` + `ucl/defmethod`,
+  in the same namespace (ClojureDart puts the methods inside the class).
   A method name that clashes with `clojure.core` (`get`, `next`, `pop`) needs
   `(:refer-clojure :exclude [...])`.
 - LeetCode's own classes (`ListNode`, `TreeNode`): `(new ListNode 0 head)`,
@@ -133,10 +145,12 @@ src/squintcode/*.cljc        solutions
 test/squintcode/*_test.cljc  their tests
 ucl/                         the library -- see ucl/README.md
   shared/ucl/contract.cljc     all host-agnostic logic; names no host
-  backends/{jvm,js,cljs,squint}/  per-host emitters
-  testkit/{jvm,cljs,squint}/   ucl.test + LeetCode fixtures (never in a submission)
+  backends/{jvm,js,cljs,squint,cljd}/  per-host emitters
+  testkit/{jvm,cljs,squint,cljd}/  ucl.test + LeetCode fixtures (never in a submission)
+  cljd-project/                the ClojureDart project template builds are made from
   test/ucl/                    the library's own suite (+ test-jvm/: expansion errors)
 bb/tasks/lc.clj              test and build tasks
+bb/tasks/dart.clj            bundles ClojureDart output into a Dart submission
 ```
 
 **Backend selection is by source root**: every backend declares the same
@@ -158,6 +172,23 @@ the first silently wins.
   `(() => { … })()` wrapper.
 - Squint is pinned to the latest release (0.14.211); 0.12.x is not supported.
 
+### ClojureDart pipelines
+
+ClojureDart (pinned `247b3c2`, Dart SDK 3.13.5 at `$DART_SDK`, default
+`~/.local/dart-sdk`) builds a project: `ucl/cljd-project/` is the template,
+the sources are copied into its `src/` (tools.deps no longer takes paths
+outside a project).
+
+- **Tests** (`bb test-cljd`): `out/cljd-test`, `cljd.test` run by `dart test`.
+- **Submissions** (`bb build`): `out/cljd-build` at `-J-Ducl.safety=0`, then
+  `bb/tasks/dart.clj` tree-shakes each solution's Dart: it fails on any
+  reference into `cljd/core.dart`, leaves `ListNode`/`TreeNode` bare for
+  LeetCode's, and adds an untyped `class Solution` (one method per function)
+  or, for a design problem, a class named like the struct that wraps it.
+- Compile errors print their cause chain (`ucl/cljd-project/report.clj`);
+  `DYNAMIC WARNING` marks dynamic member access -- expected in tests, a missing
+  declaration in a solution.
+
 ### Safety
 
 Tests run at safety 1: out-of-bounds `elt`, a store outside `fixnum`, `(incf nil)`
@@ -169,7 +200,11 @@ Squint `:ucl/safety` in `squint.edn`, ClojureScript compiler option
 
 - **Reader conditionals** (only in host-specific files — never in solutions or
   `ucl/shared`): `:squint` must come **before** `:cljs`, since Squint also
-  matches `:cljs`.
+  matches `:cljs`. ClojureDart's macro host reads `:cljd/clj-host`; its Dart
+  side reads `:cljd` only.
+- **ClojureDart in `ucl/shared`**: define every fn before its first use
+  (ClojureDart's `declare` does nothing on its macro host), and tag every fn a
+  macro calls `^:macro-support`. ClojureDart's `ucl.api` may hold macros only.
 - **Squint's macro interpreter (SCI)** limits code in `ucl/shared` and
   `ucl/backends/js`: no syntax-quoted reader conditionals in macro bodies; no
   quoted symbol inside `or` (`(or x 't)` fails — use `if`); and the Squint backend
