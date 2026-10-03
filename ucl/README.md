@@ -381,6 +381,13 @@ literal `fn`'s body takes its continuation into its tail (I42); `eql` and a
 run-time failure are two backend operations (I43); and an empty `reduce`
 without `:initial-value` decides an operator's value at compile time (I44).
 
+The ported solution (`bench/seq/`): LeetCode 1295 as `loop`/`recur`
+(`lc_1295_…`) and with `ucl/count-if` (`lc_1295_…_seq`), both as `bb build`
+submits them, n = 10⁵, median µs: V8 1003 against 1029 (7 processes; the
+JavaScript is identical but for two `const` aliases); Dart JIT 360 against
+362; Dart AOT 686 against **383** -- the expansion's counters are hinted
+`int` (I20), the hand-written `loop`'s are `dynamic`.
+
 ### 4.3 `ucl/loop` and blocks (D53–D62) -- built, but hash-table iteration (§13)
 
 `ucl/loop` is Common Lisp's `LOOP` (CLHS 6.1) for what ucl has: vectors,
