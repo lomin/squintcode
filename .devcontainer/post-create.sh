@@ -16,6 +16,14 @@ echo "[post-create] Warming Clojure dependencies..."
 clojure -P -M:test
 bb prepare
 
+echo "[post-create] Warming ClojureDart and its Dart packages..."
+# ucl/cljd-project is the template every ClojureDart build is made from:
+# fetch its git dependency and the Dart packages (`test`) into the caches.
+tmp=$(mktemp -d)
+cp ucl/cljd-project/deps.edn ucl/cljd-project/pubspec.yaml "$tmp/"
+(cd "$tmp" && clojure -P -M:cljd && dart pub get)
+rm -rf "$tmp"
+
 echo "[post-create] Installing Claude Code..."
 curl -fsSL https://claude.ai/install.sh | bash
 
@@ -25,5 +33,6 @@ npm -v
 bb --version
 clojure --version
 clj-kondo --version
+dart --version
 
 echo "[post-create] Done."

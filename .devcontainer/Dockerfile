@@ -5,7 +5,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # System packages
 # - openjdk: Clojure/ClojureScript compilation and JVM tests
 # - rlwrap: required by the `clj` launcher script
-# - unzip: needed to install clj-kondo
+# - unzip: needed to install clj-kondo and the Dart SDK
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
@@ -32,6 +32,21 @@ RUN curl -fsSL -o /tmp/node.tar.xz \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
     && rm /tmp/node.tar.xz \
     && node --version
+
+# Dart SDK -- required: ClojureDart compiles to Dart, the ucl suite and the
+# solutions run on it (`dart test`), and LeetCode takes the Dart submissions.
+# Pinned by SHA-256 like Node; update version + checksum together (checksum:
+# the .zip.sha256sum next to the zip in the dart-archive bucket).
+ARG DART_VERSION=3.13.5
+ARG DART_SHA256=19a731647c3ed55058ee46dde00330150e6a8729bb6121b4a31e86084c8a3e6d
+RUN curl -fsSL -o /tmp/dart.zip \
+    "https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-arm64-release.zip" \
+    && echo "${DART_SHA256}  /tmp/dart.zip" | sha256sum -c - \
+    && unzip -q /tmp/dart.zip -d /usr/local/lib \
+    && rm /tmp/dart.zip \
+    && /usr/local/lib/dart-sdk/bin/dart --version
+ENV DART_SDK=/usr/local/lib/dart-sdk
+ENV PATH="/usr/local/lib/dart-sdk/bin:${PATH}"
 
 # Clojure CLI (latest stable)
 RUN curl -fsSL https://download.clojure.org/install/linux-install.sh | bash -
