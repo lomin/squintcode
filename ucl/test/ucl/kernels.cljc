@@ -93,3 +93,32 @@
               sum x into s of-type fixnum
               when (>= s goal) sum (ucl/elt freq (- s goal))
               do (ucl/incf (ucl/elt freq s)))))
+;; Sequence functions (D44–D51): each in return position or a ucl/let init,
+;; where it is a statement.
+
+(ucl/defun count-greater (nums k)
+  (declare (type fixnum-vector nums) (type fixnum k))
+  (ucl/count-if (fn [x] (> x k)) nums))
+
+(ucl/defun largest (nums)
+  (declare (type fixnum-vector nums))
+  (ucl/reduce ucl/max nums))
+
+(ucl/defun first-odd-index (nums)
+  (declare (type fixnum-vector nums))
+  (ucl/let ((i (ucl/position-if (fn [x] (odd? x)) nums)))
+    (if (nil? i) -1 i)))
+
+(ucl/defun all-in-range? (nums lo hi)
+  (declare (type fixnum-vector nums) (type fixnum lo hi))
+  (ucl/every (fn [x] (and (<= lo x) (<= x hi))) nums))
+
+(ucl/defun window-odd-counts (nums w)
+  "A sequence function as a ucl/let init inside a hot loop: a statement."
+  (declare (type fixnum-vector nums) (type fixnum w))
+  (ucl/let ((total 0))
+    (declare (type fixnum total))
+    (ucl/dotimes (s (- (ucl/length nums) w -1) total)
+      (ucl/let ((c (ucl/count-if (fn [x] (odd? x)) nums :start s :end (+ s w))))
+        (declare (type fixnum c))
+        (ucl/incf total c)))))

@@ -1,11 +1,13 @@
 (ns ucl.api
   "ucl on ClojureScript, macro half (runs on the JVM while ClojureScript
    compiles). The emit map is ucl.js-emit's, in the ClojureScript flavor."
-  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop])
+  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
+                            count find some reduce])
   (:require [cljs.env :as env]
             [ucl.contract :as contract]
             [ucl.js-emit :as js-emit]
-            [ucl.loop :as ucl-loop]))
+            [ucl.loop :as ucl-loop]
+            [ucl.seq :as seq]))
 
 (def flavor
   {:array-literal (fn [items] (cons 'array items))
@@ -19,11 +21,13 @@
    :check-arity?  true
    :cells?        true
    :safety        (fn [_] (when env/*compiler*
-                            (get-in @env/*compiler* [:options :ucl/safety])))})
+                            (get-in @env/*compiler* [:options :ucl/safety])))
+   ;; keywords have no stable identity here (H14); strings compare by value (D52)
+   :eql           (fn [a b] (list 'cljs.core/keyword-identical? a b))})
 
 (defn emit [env] (js-emit/emit-map flavor env))
 
-(contract/defapi (emit &env) {:vocabularies [ucl-loop/expanders]})
+(contract/defapi (emit &env) {:vocabularies [ucl-loop/expanders seq/expanders]})
 
 ;; LeetCode's own classes are globals there; a solution names them bare, as in
 ;; (new ListNode 0 head). Declaring them as cljs.core names lets ClojureScript

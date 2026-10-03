@@ -23,6 +23,7 @@
 ;;   :vector-reads?  can an undeclared receiver be a persistent vector
 ;;   :check-arity?   does the compiler check the arity of calls to a defn
 ;;   :safety         (fn [env]) -> the build's safety level, nil when unset
+;;   :eql            (fn [a b]) -> Common Lisp's eql of two forms (D52)
 ;; ---------------------------------------------------------------------------
 
 (declare define-struct define-method)
@@ -145,6 +146,8 @@
                                (list 'if (list '> a b) a b)
                                (list 'js/Math.max a b)))}
      :string {:princ (fn [x] (list 'js/String x))}
+     :seqfn {:eql (fn [a b] ((:eql flavor) a b))
+             :fail (fn [msg] (list (api 'fail) msg))}
      :types {:hint (fn [t _]
                      (when (:tags? flavor)
                        (cond (#{:fixnum :sb53} t) 'number

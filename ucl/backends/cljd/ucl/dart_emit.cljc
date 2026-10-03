@@ -244,6 +244,10 @@
                                (let [x (gensym "a") y (gensym "b")]
                                  (list 'let [x a y b] (list 'if (list '> x y) x y)))))}
      :string {:princ (fn [x] (list '.toString x))}
+     ;; Dart's == is eql on what a sequence holds: ints and strings by value
+     ;; (D52), objects by identity unless their class says otherwise
+     :seqfn {:eql (fn [a b] (list '. a "==" b))
+             :fail (fn [msg] (list (rt 'fail) msg))}
      :types {:hint (fn [t _] (type-hint env t))
              :local-hint (fn [t] (when (contains? #{:fixnum :sb53} t) 'int))}
      :struct {:define (fn [model] (define-struct env model))}

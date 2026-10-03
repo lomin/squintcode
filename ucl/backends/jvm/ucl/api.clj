@@ -8,9 +8,11 @@
 
    This namespace defines ucl/let and ucl/dotimes, so it excludes Clojure's
    and spells them clojure.core/let and clojure.core/dotimes."
-  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop])
+  (:refer-clojure :exclude [make-array min max defstruct defmethod let dotimes loop
+                            count find some reduce])
   (:require [ucl.contract :as contract]
-            [ucl.loop :as ucl-loop])
+            [ucl.loop :as ucl-loop]
+            [ucl.seq :as seq])
   (:import [clojure.lang Compiler$LocalBinding RT]
            [java.util ArrayList HashMap List Map]))
 
@@ -92,7 +94,7 @@
 (defn check-contents
   "Safety >= 1: :initial-contents must match the dimension, as in CL."
   [n contents]
-  (clojure.core/let [c (count contents)]
+  (clojure.core/let [c (clojure.core/count contents)]
     (when-not (= c n)
       (throw (ex-info (str "ucl: make-array of " n " elements given " c " initial contents") {})))
     contents))
@@ -198,7 +200,7 @@
                           (list (getter s) ['_] f)
                           (list (setter s) ['_ 'v] (list 'set! f 'v) 'v)])
                        slots fields ifaces)
-        ctor-name? (some #(= name (:name %)) constructors)
+        ctor-name? (clojure.core/some #(= name (:name %)) constructors)
         new-form (fn [vals] (list* 'new (symbol cname) vals))]
     `(do
        (deftype ~name ~fields ~@impls)
@@ -353,6 +355,10 @@
               :min (fn [a b] (clojure.core/let [x (gensym "a") y (gensym "b")] `(clojure.core/let [~x ~a ~y ~b] (if (< ~x ~y) ~x ~y))))
               :max (fn [a b] (clojure.core/let [x (gensym "a") y (gensym "b")] `(clojure.core/let [~x ~a ~y ~b] (if (> ~x ~y) ~x ~y))))}
      :string {:princ (fn [x] (vary-meta (list 'str x) assoc :tag `String))}
+     ;; Clojure's = is eql on what a sequence holds: numbers by value and
+     ;; type category, strings by value (D52), everything else by identity
+     :seqfn {:eql (fn [a b] (list 'clojure.lang.Util/equiv a b))
+             :fail (fn [msg] (list 'throw (list 'clojure.core/ex-info (str "ucl: " msg) {})))}
      ;; a local bound to a literal: Clojure already infers a primitive long,
      ;; and refuses a hint there ("Can't type hint a local with a primitive initializer")
      :types {:hint (fn [t n] (type-tag t n))
@@ -366,4 +372,4 @@
    :min-inline (fn [& args] (contract/expand-extremum (emit {}) :min args))
    :max-inline (fn [& args] (contract/expand-extremum (emit {}) :max args))})
 
-(contract/defapi (emit &env) {:inline-extrema? true :vocabularies [ucl-loop/expanders]})
+(contract/defapi (emit &env) {:inline-extrema? true :vocabularies [ucl-loop/expanders seq/expanders]})

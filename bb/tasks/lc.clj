@@ -14,6 +14,7 @@
 (def ^:private ucl-squint-sources
   ["ucl/shared/ucl/contract.cljc"
    "ucl/shared/ucl/loop.cljc"
+   "ucl/shared/ucl/seq.cljc"
    "ucl/backends/js/ucl/js_emit.cljc"
    "ucl/backends/squint/ucl/api.cljc"])
 
@@ -188,7 +189,7 @@
     (fs/delete bundle)
     ;; ucl's macro-time code and the test kit must never reach a submission:
     ;; a top-level def with a non-literal value would survive tree shaking.
-    (when-let [leak (re-find #"ucl/(contract|loop|js_emit|leetcode|test)\.mjs" (slurp output))]
+    (when-let [leak (re-find #"ucl/(contract|loop|seq|js_emit|leetcode|test)\.mjs" (slurp output))]
       (exit! (str "ERROR: " output " contains " (first leak) " -- macro-time or test code leaked")))
     ;; An IIFE is Squint's let/loop in expression position: legal, but 8x in a
     ;; hot loop (ucl H22). Bind such a value in ucl/let instead (ucl D35).
