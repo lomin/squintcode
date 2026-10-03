@@ -186,6 +186,16 @@
    ;; equalp compares vectors element by element: the generated `equalp`
    'equalp 'equalp, 'equalpt 'equalp})
 
+(def suite-globals
+  "Globals a suite's files build from lists, which ucl has not, and that hold
+   a fixed table: their value as a ucl form. iteration/loop6.lsp's tables 1 and
+   2 are ((a . 1) (b . 2) (c . 3)) under eq and eql. Table 5's keys are 1 2 3
+   and its values conses: they stand in as keywords, so a test that reads a
+   value returns another value and is held out, never passed."
+  {'*loop.6.hash.1* '(ucl/make-hash-table :initial-contents {:a 1 :b 2 :c 3})
+   '*loop.6.hash.2* '(ucl/make-hash-table :initial-contents {:a 1 :b 2 :c 3})
+   '*loop.6.hash.5* '(ucl/make-hash-table :initial-contents {1 :a 2 :b 3 :c})})
+
 (def special #{'if 'when 'unless 'cond 'and 'or 'progn 'let 'let* 'setf 'incf 'decf 'lambda
                'function 'quote 'values 'locally 'declare})
 
@@ -204,6 +214,7 @@
         (cond
           raw? (recur more (conj out (if (seq? c) (apply list c) c)) false)
           (= c 't) (recur more (conj out true) false)
+          (contains? suite-globals c) (recur more (conj out (suite-globals c)) false)
           (symbol? c) (recur more (conj out c) (contains? loop-raw-after c))
           :else (recur more (conj out (tr c)) false))))))
 
@@ -354,7 +365,7 @@
     (number? f) f
     (= f 't) true
     (keyword? f) f
-    (symbol? f) f                                  ; a variable
+    (symbol? f) (if (contains? suite-globals f) (suite-globals f) f)   ; a variable
     (map? f) (cond (:vector f) (tr-vector (:vector f))
                    (:string f) (skip "a string")
                    :else (skip (:unsupported f)))

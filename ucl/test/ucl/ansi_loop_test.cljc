@@ -12,11 +12,34 @@
   (loop [i 0 acc []]
     (if (< i (ucl/length v)) (recur (inc i) (conj acc (ucl/elt v i))) acc)))
 
+(defn equalp
+   "Common Lisp's equalp on what the cases hold: vectors element by element."
+   [a b]
+   (cond (number? a) (and (number? b) (== a b))
+         (or (nil? a) (keyword? a) (true? a) (false? a)) (= a b)
+         :else (= (contents a) (contents b))))
+
 (deftest ansi-loop-1-conformance-test
   (testing "sloop.1" (is (= :a (ucl/loop (ucl/return :a)))))
   (testing "sloop.2" (is (= [] (ucl/loop (ucl/return (vector))))))
   (testing "sloop.3" (is (= [:a :b :c :d] (ucl/loop (ucl/return (vector :a :b :c :d))))))
   (testing "sloop.4" (is (= :b (ucl/block nil (ucl/loop (ucl/return :a)) :b)))))
+
+(deftest ansi-loop6-1-conformance-test
+  (testing "loop.6.1" (is (= 6 (ucl/loop for x being the hash-value of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum x))))
+  (testing "loop.6.2" (is (= 6 (ucl/loop for x being the hash-values of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum x))))
+  (testing "loop.6.3" (is (= 6 (ucl/loop for x being each hash-value of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum x))))
+  (testing "loop.6.4" (is (= 6 (ucl/loop for x being each hash-values of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum x))))
+  (testing "loop.6.5" (is (= 6 (ucl/loop for x being the hash-values in (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum x))))
+  (testing "loop.6.19" (is (= 3 (ucl/loop for nil being the hash-values of (ucl/make-hash-table :initial-contents {1 :a, 2 :b, 3 :c}) count true))))
+  (testing "loop.6.20" (is (= 3 (ucl/loop for nil being the hash-keys of (ucl/make-hash-table :initial-contents {1 :a, 2 :b, 3 :c}) count true))))
+  (testing "loop.6.23" (is (= 6 (ucl/loop for v fixnum being the hash-values of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum v))))
+  (testing "loop.6.24" (is (= 6 (ucl/loop for v of-type fixnum being the hash-values of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum v))))
+  (testing "loop.6.25" (is (= 6 (ucl/loop for k fixnum being the hash-keys of (ucl/make-hash-table :initial-contents {1 :a, 2 :b, 3 :c}) sum k))))
+  (testing "loop.6.26" (is (= 6 (ucl/loop for k of-type fixnum being the hash-keys of (ucl/make-hash-table :initial-contents {1 :a, 2 :b, 3 :c}) sum k))))
+  (testing "loop.6.28" (is (= 6 (ucl/loop for k of-type t being the hash-keys of (ucl/make-hash-table :initial-contents {1 :a, 2 :b, 3 :c}) sum k))))
+  (testing "loop.6.30" (is (= 6 (ucl/loop for v of-type t being the hash-values of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum v))))
+  (testing "loop.6.39" (is (= 6 (ucl/loop as x being the hash-value of (ucl/make-hash-table :initial-contents {:a 1, :b 2, :c 3}) sum x)))))
 
 (deftest ansi-loop8-1-conformance-test
   (testing "loop.8.1" (is (= 1 (ucl/loop with x = 1 do (ucl/return x)))))
