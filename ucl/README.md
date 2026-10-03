@@ -22,11 +22,13 @@ Dart never (§9.10, H55–H58). Nothing in ucl changed; §13 records what would.
 
 **Sequence functions** (2026-10-03, a fourth grilling session): Common Lisp's
 sequence functions over vectors, each inlining a literal `fn` at expansion.
-Built: the query slice -- `count`, `find`, `position` (with `-if`,
-`-if-not`), `reduce`, `every`, `some`, `notany`, `notevery` -- and the
-second, `fill`, `replace`, `copy-seq`, `subseq`, `reverse`, `nreverse`,
-`sort`, `stable-sort`; the rest is designed (§4.2, D44–D52, §9.11, §9.13,
-I40–I47, H70–H72).
+All 43 are built, in three slices: the query slice (`count`, `find`,
+`position` and their `-if`/`-if-not` forms, `reduce`, the `every` family), the
+second slice (`fill`, `replace`, `copy-seq`, `subseq`, `reverse`, `nreverse`,
+`sort`, `stable-sort`), and the third (`remove`, `delete`, `substitute`,
+`nsubstitute`, the duplicates functions, `mismatch`, `search`,
+`make-sequence`, `map`, `map-into`, `concatenate`, `merge`, `(setf subseq)`).
+See §4.2, D44–D52, §9.11, §9.13, I40–I50 and H70–H72.
 
 **`ucl/loop` and blocks** (2026-10-03, a fifth grilling session): Common
 Lisp's `LOOP` over vectors, numbers and hash tables, and its block model --
@@ -307,7 +309,7 @@ assigning one is a compile-time error naming it (D31).
   `ucl/dotimes`, `with-slots`), and that `case` constants are not evaluated. It
   does not expand user macros (§13).
 
-### 4.2 Sequence functions (D44–D52) -- the query slice built, the rest designed
+### 4.2 Sequence functions (D44–D52) -- built
 
 A **sequence function** is one of Common Lisp's functions over sequences: CLHS
 Chapter 17 and `every`, `some`, `notany`, `notevery` (§5.3). In ucl a sequence
@@ -415,13 +417,25 @@ itself. Measured against counting first and filling an exact-size copy, n =
 10⁵ on an `Int32Array`/`Int32List`, the copy-and-compact is 25–40% faster on
 V8 and 13–25% on Dart AOT, whether nothing, a few, half or most elements go.
 
+**Built: the third slice, the rest** -- `remove-duplicates`,
+`delete-duplicates`, `mismatch`, `search`, `make-sequence`, `map`,
+`map-into`, `concatenate`, `merge`, and `subseq` as a `setf` place (I50).
+With them every function D44 scopes is built. Each of them that pairs elements
+(`mismatch`, `search`, `merge`, a `remove-duplicates` with `:test`) is one
+loop with two counters: an inner loop would sit in an `if` test, an IIFE on
+Squint. Under the default test, eql, `remove-duplicates` checks the keys it
+has seen in a ucl hash table, a single pass. A result type is quoted and
+decided at expansion: `'vector` gives a general vector, `'(vector fixnum)` or
+`'fixnum-vector` an `Int32Array`/`int[]`/`Int32List`.
+
 **Checked against the ANSI test suite** (I45, I46; `ucl/ansi/REPORT.md`). Of
-the 2,525 tests the suite has for these 34 functions, 339 use only data ucl
+the 3,149 tests the suite has for these 43 functions, 388 use only data ucl
 has -- vectors of numbers and symbols -- and translate; each passes on the
 four hosts and, translated back by `ucl/conformance.clj`, on SBCL and ECL.
 The rest need lists, bit vectors, characters or strings, or are error tests;
 the report counts each reason. Checking the query slice against the suite
-found four deviations, fixed by I45; the third slice one, fixed by I49.
+found four deviations, fixed by I45; the third slice one, fixed by I49. Three
+tests translate unfaithfully, and the translator names and skips them.
 
 ### 4.3 `ucl/loop` and blocks (D53–D63) -- built, but `loop-finish` and `for … and` (§13)
 
@@ -1573,6 +1587,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I47 | The second slice: a function's sequence may come first (`:seq-pos`), and a curried form splices it back there; `subseq`'s optional end makes only a one-argument call curried. At safety ≥ 1 stores go through the checked `setf` of `elt`, at safety 0 through the backend's `:seqfn` `:fill`, `:replace`, `:subseq` and `:sort-native`, nil where the loop is faster (I40). `replace` within one vector copies downward when its ranges overlap upward; `sort`'s scratch vector is `(copy-seq v)`, of `v`'s kind without a type at expansion (I23); every sequence function checks 0 ≤ start ≤ end ≤ length at safety ≥ 1 | CLHS replace and 17.1.1; I40's measurements; a copy keeps `Int32Array`/`Int32List` without reading the environment |
 | I48 | An expander may read the environment through one backend operation only, `:types :vector-element` -- the declared element type of a vector symbol, `:fixnum` on Dart from its `List<int>` tag, nil on JS and the JVM -- and only for a hint, never for meaning; `reduce` uses it to type its accumulator. The contract makes it safe under early expansion: return-position assignment passes the names its binding forms rebind on the way to a tail, the walker its `:shadowed` names, the block compiler "all"; `vector-element` is not consulted for those (`:rebound`). A narrowing of I23, agreed with the `ucl/loop` session | ClojureDart drops a loop local's inferred type (`emit-loop*`); a typed accumulator is 2–4× on Dart AOT; a stale environment could otherwise hint a rebound name and fail on Dart only, a partial host |
 | I49 | The third slice's first part: `substitute`'s new item comes first (`:new`), so its curried form omits the third argument. `:count` limits the elements changed: nil at run time is all, a negative count none; with `:from-end` the rightmost go. `:from-end` also sets the order the test sees the elements in when there is no `:count`, as in SBCL -- the ANSI suite counts the calls. `remove` compacts into a copy (`subseq` of the sequence, so it has the sequence's kind with no type at expansion, I23) and trims it only when shorter; `delete` compacts in place and returns a fresh vector only when shorter; an absent `:end` or a zero `:start` leaves no tail or head to move | Measured faster than counting first (§4.2); a vector cannot shrink, and CLHS lets `delete` return a fresh one |
+| I50 | The rest of the third slice. A result type (`make-sequence`, `map`, `concatenate`, `merge`) must be quoted, or `map`'s nil: `vector`, `simple-vector`, `(vector E [size])`, `(simple-array E (*))` or a ucl abbreviation, E one of `make-array`'s element types; anything else fails at expansion, and a size is not checked. `remove-duplicates` under eql keeps a ucl hash table of the keys seen and compacts from the end, so the last occurrence is the one kept, or with `:from-end` from the start; under another test it compares each element with every later (or earlier) one, earlier element first. `mismatch`, `search` and `merge` are one loop each with two counters; `search` compares naively, O(n·m). `(setf (subseq v s [e]) new)` is `replace`, its arguments evaluated left to right, valued `new` -- one shared rewrite in `expand-write`, since it is not a host operation | No IIFE (D51); a ucl hash table is eql on every host (§6); every result type is known at expansion (I23) |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1731,10 +1746,10 @@ backend selection by source root; mutable host collections only.
   `:allow-other-keys` when other keys are given (I45); a `:key` that is nil
   only at run time fails as a call of nil. A curried form inlined into a
   predicate is a loop in an `if` test: an IIFE on Squint (D51). A curried
-  `subseq` takes its start only: `(subseq 1 3)` would read as a call. Not
-  built yet: `remove-duplicates`, `delete-duplicates`, `map`, `map-into`,
-  `concatenate`, `make-sequence`, `merge`, `search`, `mismatch`,
-  `(setf subseq)` (D44). On the JVM, a test host, the copy a function works in
+  `subseq` takes its start only: `(subseq 1 3)` would read as a call.
+  `map-into` does not set a fill pointer to the elements it stored (CLHS
+  does); `search` is O(n·m), as is `remove-duplicates` with `:test` or
+  `:test-not` O(n²). On the JVM, a test host, the copy a function works in
   (`sort`'s scratch vector, `remove`'s result) is an untyped local: its stores
   take the dynamic path, with the warning.
 - **Compiler passes** (D51). A sequence function or a `ucl/loop` in
