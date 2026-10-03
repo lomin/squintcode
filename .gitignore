@@ -13,6 +13,7 @@ cljs-test-runner-out/
 
 out/
 out-cljs*/
+submissions/
 
 .lein-deps-sum
 .lein-repl-history
