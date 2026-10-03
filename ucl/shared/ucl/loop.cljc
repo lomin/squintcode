@@ -283,9 +283,13 @@
 
 (defn ^:macro-support once
   "[bindings form]: `x`, evaluated once -- bound to a fresh local unless it is
-   a literal. A symbol too: a variable may be assigned while the loop runs."
-  [x prefix]
-  (if (contract/literal? x) [[] x] (let [g (gensym prefix)] [[g x] g])))
+   a literal, or a symbol the loop does not assign (`assigned`): only the
+   loop's own code could assign a variable while it runs. A needless alias of
+   a vector costs V8 ≈15% (§9.14)."
+  [x prefix assigned]
+  (if (or (contract/literal? x) (and (symbol? x) (not (contains? assigned x))))
+    [[] x]
+    (let [g (gensym prefix)] [[g x] g])))
 
 (defn ^:macro-support render
   "Fold `ops` around `tail`, innermost last:
@@ -339,18 +343,49 @@
                     (fail! "always, never and thereis decide the loop's value; an accumulation without into cannot too"
                            form))
             acc   (when (seq anon) (gensym "acc"))
+            ;; the symbols the loop's own code assigns
+            assigned (contract/assigned-vars backend
+                                             (set (filter symbol? (mapcat (fn [c] [(:from c) (:limit c) (:by c) (:vector c)]) fors)))
+                                             (rest form))
+            acc-type (when acc
+                       (if (every? #(= :count (:kind %)) anon)
+                         :fixnum
+                         (some #(when (:type %) (contract/canonical-type (:type %))) anon)))
             minimax? (fn [c] (= :minimax (acc-class (:kind c))))
-            acc-first (when (some minimax? anon) (gensym "first"))
+            ;; A maximize/minimize declared fixnum starts at the type's far end
+            ;; -- most-negative-fixnum for maximize -- with no first-value flag,
+            ;; as SBCL and ECL do (H65): nothing accumulated, that is its value.
+            ;; It goes through the backend's max/min (I6, §9.14). Untyped, it
+            ;; starts at 0 and a flag takes the first value.
+            _     (doseq [c accs]
+                    (when (and (minimax? c) (:type c) (not= :fixnum (contract/canonical-type (:type c))))
+                      (fail! (str (name (:kind c)) " of-type " (pr-str (:type c))
+                                  ": SBCL signals a type error for it and ECL does not (H65); "
+                                  "declare it fixnum, or leave it untyped")
+                             form)))
+            sentinel (fn [kind] (if (= :maximize kind) -2147483648 2147483647))
+            typed-minimax? (fn [cs] (and (seq cs) (every? minimax? cs)
+                                         (some #(= :fixnum (contract/canonical-type (:type %))) cs)))
+            _     (doseq [cs (cons anon (vals (group-by :into (filter :into accs))))]
+                    (when (and (typed-minimax? cs) (< 1 (count (set (map :kind cs)))))
+                      (fail! "maximize and minimize into one fixnum accumulator: which end does it start at?"
+                             form)))
+            acc-sentinel (when (typed-minimax? anon) (sentinel (:kind (first anon))))
+            acc-first (when (and (some minimax? anon) (nil? acc-sentinel)) (gensym "first"))
             ;; named accumulators: one variable each, a first-flag for minimax
             intos (reduce (fn [m c]
                             (let [v (:into c)
                                   e (get m v)]
                               (if (nil? v)
                                 m
-                                (assoc m v {:type  (if (:type e) (:type e) (:type c))
-                                            :first (cond (:first e) (:first e)
-                                                         (minimax? c) (gensym (str (name v) "-first"))
-                                                         :else nil)}))))
+                                (let [cs (filter #(= v (:into %)) accs)
+                                      typed (typed-minimax? cs)]
+                                  (assoc m v {:type  (if (:type e) (:type e) (:type c))
+                                              :init  (if typed (sentinel (:kind c)) 0)
+                                              :first (cond typed nil
+                                                           (:first e) (:first e)
+                                                           (minimax? c) (gensym (str (name v) "-first"))
+                                                           :else nil)})))))
                           {} accs)
             result (cond acc acc
                          (some #(contains? #{:always :never} (:clause %)) booleans) true
@@ -363,34 +398,65 @@
                           (case (:kind c)
                             :arith
                             (let [onces (reduce (fn [[bs m] k]
-                                                  (let [[b x] (once (get c k) (name k))]
+                                                  (let [[b x] (once (get c k) (name k) assigned)]
                                                     [(into bs b) (assoc m k x)]))
                                                 [[] {}] (:order c))
                                   [bs m] onces
                                   from (if (contains? m :from) (:from m) 0)
                                   by (if (contains? m :by) (:by m) 1)
                                   v (:var c)
+                                  int-or-none? (fn [k] (or (not (contains? c k)) (integer? (get c k))))
+                                  ;; an integer start and step count in integers: a fixnum
+                                  t (cond (:type c) (contract/canonical-type (:type c))
+                                          (and (int-or-none? :from) (int-or-none? :by)) :fixnum
+                                          :else nil)
                                   test (when (contains? m :limit)
                                          (list (if (= :up (:dir c))
                                                  (if (:inclusive c) '> '>=)
                                                  (if (:inclusive c) '< '<=))
                                                v (:limit m)))]
-                              {:onces bs :vars [v] :init [[v from]]
+                              {:onces bs :vars [v] :types {v t} :init [[v from]]
                                :step [[v (list (if (= :up (:dir c)) '+ '-) v by)]]
                                :test test})
                             :equals
                             {:onces [] :vars [(:var c)] :init [[(:var c) (:init c)]]
+                             :types {(:var c) (when (:type c) (contract/canonical-type (:type c)))}
                              :step [[(:var c) (:then c)]] :test nil}
                             :across
-                            (let [[bs vec] (once (:vector c) "vec")
+                            (let [[bs vec] (once (:vector c) "vec" assigned)
                                   len (gensym "len") idx (gensym "i") v (:var c)]
                               {:onces (into bs [len (list (u "length") vec)])
-                               :vars [idx v]
+                               ;; the element is no loop parameter: read at the top of
+                               ;; each iteration, it has the vector's element type
+                               :vars [idx]
+                               :types {idx :fixnum}
+                               :top [[v (list (u "elt") vec idx)]]
                                :init [[idx 0]]
                                :step [[idx (list 'inc idx)]]
                                :test (list '>= idx len)
                                :after [[v (list (u "elt") vec idx)]]})))
                         fors)
+            ;; a count from an integer c by 1 beside an across is its index + c: no second
+            ;; counter (§9.14) -- unless finally or another for clause reads
+            ;; it, where the order of their steps would show
+            fors' (let [idx (some (fn [[f c]] (when (= :across (:kind c)) (first (:vars f))))
+                                  (map vector fors' fors))]
+                    (mapv (fn [f c]
+                            (if (and idx (= :arith (:kind c)) (= :up (:dir c))
+                                     (not (contains? c :limit))
+                                     (or (not (contains? c :from)) (integer? (:from c)))
+                                     (or (not (contains? c :by)) (= 1 (:by c)))
+                                     (contains? #{nil :fixnum} (get (:types f) (:var c)))
+                                     (not (contract/mentions? finally #{(:var c)}))
+                                     (not-any? #(and (not (identical? % c))
+                                                     (contract/mentions? [(:from %) (:limit %) (:by %) (:vector %) (:init %) (:then %)]
+                                                                         #{(:var c)}))
+                                               fors))
+                              {:onces [] :vars [] :types {} :init [] :step [] :test nil
+                               :top [[(:var c) (let [k (if (contains? c :from) (:from c) 0)]
+                                                 (if (zero? k) idx (list '+ idx k)))]]}
+                              f))
+                          fors' fors))
             for-names (map :var fors)
             ;; the epilogue where only some for names are bound yet
             epi-at (fn [bound]
@@ -407,14 +473,27 @@
                             target (if (:into c) (:into c) acc)
                             first-flag (if (:into c) (:first (get intos (:into c))) acc-first)
                             named? (some? (:into c))
-                            ;; maximize and minimize read the value three times: bind it
-                            vsym (if (contains? #{:maximize :minimize} kind) (gensym "x") x)
+                            ;; the accumulator's type, when declared
+                            t (if (:into c)
+                                (when (:type (get intos (:into c))) (contract/canonical-type (:type (get intos (:into c)))))
+                                acc-type)
+                            h (when (contains? #{:sum :maximize :minimize} kind)
+                                ((contract/op backend :types :local-hint) t))
+                            ;; maximize and minimize read the value three times, and a
+                            ;; typed accumulator takes a value of its type: bind it
+                            vsym (if (or h (and (contains? #{:maximize :minimize} kind) first-flag))
+                                   (let [g (gensym "x")] (if h (vary-meta g assoc :tag h) g))
+                                   x)
                             ;; the new value of the accumulator, given the value `x`
                             new (case kind
                                   :count (list 'if vsym (list 'inc target) target)
                                   :sum (list '+ target vsym)
-                                  :maximize (list 'if first-flag vsym (list 'if (list '> vsym target) vsym target))
-                                  :minimize (list 'if first-flag vsym (list 'if (list '< vsym target) vsym target)))
+                                  :maximize (if first-flag
+                                              (list 'if first-flag vsym (list 'if (list '> vsym target) vsym target))
+                                              (list (u "max") target vsym))
+                                  :minimize (if first-flag
+                                              (list 'if first-flag vsym (list 'if (list '< vsym target) vsym target))
+                                              (list (u "min") target vsym)))
                             first-ops (when first-flag [[:bind first-flag (guarded guard false first-flag)]])]
                         (concat
                          (when-not (= vsym x) [[:bind vsym (guarded guard x 0)]])
@@ -462,27 +541,44 @@
                                 (when acc-first [acc-first])
                                 (keep (comp :first val) intos)
                                 (map first @repeats)))
-            step-ops (vec (mapcat (fn [f]
-                                    (concat (map (fn [[v x]] [:bind v x]) (:step f))
-                                            (when (:test f) [[:end (:test f) true]])
-                                            (map (fn [[v x]] [:bind v x]) (:after f))))
-                                  fors'))
-            body (render (into main-ops step-ops) (list* 'recur params) epi)
-            the-loop (list 'loop (vec (mapcat (fn [s] [s s]) params)) body)
+            ;; each parameter's type, hinted for a host that types locals by
+            ;; hint (ClojureDart: else `dynamic`, I20)
+            types (merge (apply merge (map :types fors'))
+                         (when acc {acc acc-type})
+                         (into {} (map (fn [[n _]] [n :fixnum]) @repeats)))
+            hint (fn [s] (let [h ((contract/op backend :types :local-hint) (get types s))]
+                           (if h (vary-meta s assoc :tag h) s)))
+            ;; an across element is rebound after its step only if something
+            ;; after it -- a later for clause, finally -- reads it
+            needed-after? (fn [i v]
+                            (contract/mentions? (concat (mapcat (fn [f] (concat (:step f) (:after f) [(:test f)]))
+                                                                (drop (inc i) fors'))
+                                                        finally)
+                                                #{v}))
+            after-ops (fn [i f] (keep (fn [[v x]] (when (needed-after? i v) [:bind v x])) (:after f)))
+            step-ops (vec (apply concat
+                                 (map-indexed (fn [i f]
+                                                (concat (map (fn [[v x]] [:bind v x]) (:step f))
+                                                        (when (:test f) [[:end (:test f) true]])
+                                                        (after-ops i f)))
+                                              fors')))
+            top-ops (vec (mapcat (fn [f] (map (fn [[v x]] [:bind v x]) (:top f))) fors'))
+            body (render (concat top-ops main-ops step-ops) (list* 'recur params) epi)
+            the-loop (list 'loop (vec (mapcat (fn [s] [(hint s) s]) params)) body)
             ;; the prologue: each for clause in turn, its end test at its first value
             pre-loop (render (map (fn [[n x]] [:bind n x]) @repeats) the-loop epi)
             prologue (reduce (fn [inner [f bound]]
                                (let [ops (concat (map (fn [[a b]] [:bind a b]) (partition 2 (:onces f)))
                                                  (map (fn [[v x]] [:bind v x]) (:init f))
                                                  (when (:test f) [[:end (:test f) true]])
-                                                 (map (fn [[v x]] [:bind v x]) (:after f)))]
+                                                 (after-ops (:index f) f))]
                                  (render ops inner (epi-at bound))))
                              pre-loop
-                             (reverse (map (fn [f c before]
+                             (reverse (map (fn [f c before i]
                                              ;; at its end test, an across name is not bound yet
-                                             [f (if (= :across (:kind c)) before (conj before (:var c)))])
-                                           fors' fors (reductions conj [] for-names))))
-            prologue (render (concat (when acc [[:bind acc 0]])
+                                             [(assoc f :index i) (if (= :across (:kind c)) before (conj before (:var c)))])
+                                           fors' fors (reductions conj [] for-names) (range))))
+            prologue (render (concat (when acc [[:bind acc (if acc-sentinel acc-sentinel 0)]])
                                      (when acc-first [[:bind acc-first true]])
                                      (keep (fn [[_ e]] (when (:first e) [:bind (:first e) true])) intos))
                              prologue epi)
@@ -490,7 +586,7 @@
             ;; with groups (sequential; `and` in parallel), then the into variables
             var-groups (concat (map (fn [g] (map (fn [w] [(:var w) (:type w) (:init w)]) g)) withs)
                                (when (seq intos)
-                                 [(map (fn [[v e]] [v (:type e) 0]) intos)]))
+                                 [(map (fn [[v e]] [v (:type e) (:init e)]) intos)]))
             wrapped (reduce (fn [inner group]
                               (let [typed (filter second group)]
                                 (list* (u "let")

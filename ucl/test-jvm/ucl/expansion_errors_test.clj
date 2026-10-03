@@ -74,6 +74,10 @@
   (testing "one default accumulator, of one kind"
     (signals? #"sum/count and maximize/minimize accumulate into one value"
               (ucl/loop for x across [1] sum x maximize x))
+    (signals? #"maximize of-type \(signed-byte 53\): SBCL signals a type error"
+              (ucl/loop for x across [1] maximize x of-type (signed-byte 53)))
+    (signals? #"maximize and minimize into one fixnum accumulator"
+              (ucl/loop for x across [1] maximize x into m of-type fixnum minimize x into m))
     (signals? #"always, never and thereis decide the loop's value"
               (ucl/loop for x across [1] sum x always x)))
   (testing "not built yet (§13)"

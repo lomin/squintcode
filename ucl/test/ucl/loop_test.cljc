@@ -20,6 +20,18 @@
     (is (= 0 (ucl/loop for x across [] sum x)))
     (is (= 0 (ucl/loop for x across [] count x)))
     (is (= 0 (ucl/loop for x across [] maximize x))))
+  (testing "a fixnum maximize or minimize starts at the type's far end (H65)"
+    (is (= true (== ucl/most-negative-fixnum (ucl/loop for x across [] maximize x of-type fixnum))))
+    (is (= true (== ucl/most-positive-fixnum (ucl/loop for x across [] minimize x of-type fixnum))))
+    (is (= true (== ucl/most-negative-fixnum (ucl/loop for x across [1 2] when (> x 5) maximize x of-type fixnum))))
+    (is (= true (== ucl/most-negative-fixnum (ucl/loop for x across [] maximize x into m of-type fixnum finally (return m)))))
+    (is (= -9 (ucl/loop for x across [3 -9 2] minimize x of-type fixnum)))
+    (is (= -2 (ucl/loop for x across [-5 -2 -7] maximize x of-type fixnum)))
+    (is (= 3 (ucl/loop for x across [3 9 2] while (< x 5) maximize x of-type fixnum)))
+    (is (= 2 (ucl/loop for x across [1 2 3] maximize x of-type fixnum while (< x 2)))))
+  (testing "untyped, it starts at 0 and takes the first value"
+    (is (= 0 (ucl/loop for x across [] maximize x into m finally (return m))))
+    (is (= -2 (ucl/loop for x across [-5 -2 -7] maximize x))))
   (testing "into a variable: no default value, but finally reads it"
     (is (= nil (ucl/loop for x across [1 2] sum x into s)))
     (is (= 3 (ucl/loop for x across [1 2] sum x into s finally (return s))))
@@ -50,8 +62,9 @@
     (is (= 12 (ucl/loop for i downfrom 5 to 3 sum i)))
     (is (= 0 (ucl/loop for i from 5 below 3 count (> i 0))))
     (is (= 3 (ucl/loop for i upfrom 1 repeat 3 count (> i 0)))))
-  (testing "the limit and step are evaluated once"
-    (is (= 6 (ucl/let ((n 3)) (ucl/loop for i from 1 to n do (ucl/setf n 10) sum i)))))
+  (testing "the limit, step and vector are evaluated once"
+    (is (= 6 (ucl/let ((n 3)) (ucl/loop for i from 1 to n do (ucl/setf n 10) sum i))))
+    (is (= 6 (ucl/let ((v [1 2 3])) (ucl/loop for x across v do (ucl/setf v [9 9 9 9]) sum x)))))
   (testing "= and = then"
     (is (= 32 (ucl/loop for x = 1 then (* x 2) repeat 5 finally (return x))))
     (is (= 15 (ucl/loop for i from 1 to 5 for sq = (* i i) sum (- sq (* i (- i 1)))))))
