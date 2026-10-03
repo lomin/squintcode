@@ -398,6 +398,14 @@ one merge sort with the predicate inlined, its scratch vector a copy of the
 sequence; V8's typed sort replaces it for `<`, behind a run-time check
 (H70). Every sequence function now checks its bounding indices at safety ≥ 1.
 
+**Typed accumulators** (I48). ClojureDart types a loop local only by a hint,
+so `reduce`'s accumulator was `dynamic`, cast at every use. Over a declared
+`fixnum-vector`, with `ucl/max`, `ucl/min`, `+`, `-`, `*` or a bit operation,
+no `:key` and a literal integer or no `:initial-value`, it is now an `int`:
+Dart AOT, 10⁵ elements, `(ucl/reduce ucl/max nums)` 199 → 99 µs and
+`(ucl/reduce + nums :initial-value 0)` 247 → 66 µs; Dart JIT and the other
+hosts unchanged.
+
 **Checked against the ANSI test suite** (I45, I46; `ucl/ansi/REPORT.md`). Of
 the 1,622 tests the suite has for these 22 functions, 217 use only data ucl
 has -- vectors of numbers and symbols -- and translate; each passes on the
@@ -1541,6 +1549,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I45 | Found against the ANSI test suite: `:allow-other-keys` (leftmost wins) admits other keys, whose values are still evaluated; with other keys present its value must be a literal, else a compile-time error; every keyword value is evaluated, a repeated key's too; `'f` and `#'f` (`(var f)`) call the global `f`; a literal nil `:key` is identity | CLHS 3.4.1.4, 3.4.1.4.1, 1.4.1.5, 17.2.1; before, `'identity` was called as a Clojure symbol -- a map lookup, silently wrong |
 | I46 | `ucl/ansi/translate.clj` turns the ANSI test suite (pinned commit) into ucl tests: a Common Lisp reader, a translation of the vector subset (symbols become keywords, `#'f` Clojure's `f`, `values` a vector), a validation of each case on the JVM backend -- a case ucl rejects at expansion becomes a skip with ucl's message, one returning another value is held out and reported -- and output as `*-conformance-test`s, which `ucl/conformance.clj` runs on SBCL and ECL as well. Generated tests are committed; the translator is rerun by hand | the suite is Common Lisp and ucl is not: only a translation can use it; the round trip through SBCL and ECL checks the translation, the four hosts check ucl |
 | I47 | The second slice: a function's sequence may come first (`:seq-pos`), and a curried form splices it back there; `subseq`'s optional end makes only a one-argument call curried. At safety ≥ 1 stores go through the checked `setf` of `elt`, at safety 0 through the backend's `:seqfn` `:fill`, `:replace`, `:subseq` and `:sort-native`, nil where the loop is faster (I40). `replace` within one vector copies downward when its ranges overlap upward; `sort`'s scratch vector is `(copy-seq v)`, of `v`'s kind without a type at expansion (I23); every sequence function checks 0 ≤ start ≤ end ≤ length at safety ≥ 1 | CLHS replace and 17.1.1; I40's measurements; a copy keeps `Int32Array`/`Int32List` without reading the environment |
+| I48 | An expander may read the environment through one backend operation only, `:types :vector-element` -- the declared element type of a vector symbol, `:fixnum` on Dart from its `List<int>` tag, nil on JS and the JVM -- and only for a hint, never for meaning; `reduce` uses it to type its accumulator. The contract makes it safe under early expansion: return-position assignment passes the names its binding forms rebind on the way to a tail, the walker its `:shadowed` names, the block compiler "all"; `vector-element` is not consulted for those (`:rebound`). A narrowing of I23, agreed with the `ucl/loop` session | ClojureDart drops a loop local's inferred type (`emit-loop*`); a typed accumulator is 2–4× on Dart AOT; a stale environment could otherwise hint a rebound name and fail on Dart only, a partial host |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
