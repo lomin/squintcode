@@ -1393,6 +1393,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I26 | `defapi` defines a macro for each of `vocabulary-names` -- a literal list every vocabulary adds its names to -- that expands through its registry entry (`expand-vocabulary`), without `:applies?` | one place for the API surface (D26) of `ucl/loop` and the sequence functions; agreed with the sequence-functions session |
 | I27 | `ucl/loop` expands to one Clojure `loop` whose parameters are the `for` names, the internal counters, the default accumulator and `maximize`/`minimize` first-flags; each iteration runs the main clauses in order, then each `for` clause's step and end test, as Common Lisp orders them -- the same tests run once on the first values before the loop. A conditional binds its test (`it`) and a then/else local, and guards each clause under it; a value is read once, a `with`/`into` name assigned with `ucl/setf`. The epilogue (`finally`, the value) is copied to every end test, where every name it reads is bound -- no variable carries a value out of the loop | the 930 kernel's JavaScript is the hand-written loop: one `while`, one ternary per guarded `sum`, no IIFE; SBCL and ECL print the same `finally` values (H64) |
 | I28 | An expansion writes ucl's forms through the alias the caller wrote `ucl/loop` with (`ucl/elt`, `ucl/let`, `ucl/block`), and they expand later where the environment is right (I23) | they resolve exactly as the caller's own code; no host needs a fully qualified macro name |
+| I29 | Conformance (D60) is `ucl/conformance.clj`: every `(is (= expected form))` in a `deftest` named `*-conformance-test` is translated to Common Lisp -- ucl's names through the alias, vectors, numbers, booleans and a table of Clojure functions; anything else fails the run -- evaluated per case on SBCL and ECL, and its printed value compared with `expected`. The four hosts run the same assertions as tests, so all six agree. `ucl/run-tests.sh` runs it as a fifth host, `cl` | the cases are written once, where they already are; any vocabulary (the sequence functions too) joins by naming a deftest |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1565,6 +1566,11 @@ backend selection by source root; mutable host collections only.
     (I25). Exit from a statement, or test with `thereis`/`always`/`never`.
   - `across` waits for strings and characters in the contract.
   - Hash-table iteration order differs on the JVM (D58).
+  - More conformance cases: the ANSI test suite (Paul Dietz;
+    ansi-test.common-lisp.dev, MIT-style licence) has 743 LOOP tests with
+    their expected values, by CLHS section; those within D53 -- most of
+    `loop10.lsp`'s 101 numeric accumulations -- could be imported as
+    conformance cases.
 - **No JMH.** JVM numbers rest on simple shapes.
 - **The repository split** (`ucl`, `ucl-jvm`, `ucl-cljs`, `ucl-squint`) is laid
   out, not performed.
@@ -1639,6 +1645,7 @@ was a claim made without compiling or measuring first.
 | "ClojureDart's `and` costs ≈18% under the JIT" (H48, recorded as an open item) | The `late` on the local it forks into did (H54); every `if` in expression position paid it. Measured by removing one difference at a time, then fixed (D43). |
 | The prototype's typed `dotimes` counter | Overloaded `:hint`'s parameter count with `:local`: the JVM backend would have thrown, and Clojure refuses a hint there anyway. Became `:local-hint` (I20) before it shipped. |
 | Before the probe: "a function V8 inlines -- one closure, one call site -- costs close to nothing" | Only when the closure assigns nothing: one that assigns `ucl/let` variables costs 2–7× even inlined (§9.10, H58). |
+| `ucl/loop`'s first suite: eight of 58 expected values, written by hand | Wrong -- `for i from 10 above 1 by 3` sums 21, not 22; `return it` returns the test's value `T` -- and the implementation right. SBCL and ECL, running the same cases (I29), said so before any of it was committed. |
 | D55 as designed: "an exit inside an inner Clojure `loop` is a compile-time error" | Any loop can be left statically: it ends by not recurring, with a flag when code follows it (I25). Found while implementing; the restriction was never needed. |
 | `ucl/loop` grilling: "`minimize p of-type fixnum into lo`" | The type follows `into`: `minimize p into lo of-type fixnum`. SBCL refused the first; found by running §4.3's examples on SBCL and ECL before writing them down. |
 

@@ -10,7 +10,7 @@ ROOT="$(cd .. && pwd)"
 SQUINT="${SQUINT:-$ROOT/node_modules/.bin/squint}"
 CLJS_VERSION="${CLJS_VERSION:-1.12.42}"
 OUT=out
-HOSTS="${*:-jvm cljs squint cljd}"   # e.g. ./run-tests.sh squint
+HOSTS="${*:-jvm cljs squint cljd cl}"   # e.g. ./run-tests.sh squint; cl = SBCL and ECL (D60)
 DART_SDK="${DART_SDK:-$HOME/.local/dart-sdk}"
 export PATH="$DART_SDK/bin:$PATH"
 want () { [[ " $HOSTS " == *" $1 "* ]]; }
@@ -24,6 +24,12 @@ hr "STATIC CHECKS"
 # H6: Squint loads a file for macros only if the word appears in it.
 grep -q 'defmacro' backends/squint/ucl/api.cljc || { echo "squint backend lost its defmacro marker"; exit 1; }
 echo "squint defmacro marker present"
+
+if want cl; then
+hr "COMMON LISP: SBCL AND ECL (D60)"
+# every (is (= expected form)) in a *-conformance-test also runs on SBCL and ECL
+bb conformance.clj $(find test -name '*_test.cljc' | sort)
+fi
 
 if want jvm; then
 hr "CLOJURE / JVM"
