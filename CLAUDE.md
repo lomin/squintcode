@@ -104,6 +104,9 @@ Rules:
   `(return-from name [v])`, `(return [v])` (`dotimes` is a block
   nil, `defun` one named after it; an exit compiles only in statement or return
   position), `defun` + `(declare (type …))`, `defstruct` (BOA constructors, `&optional`, `&aux`),
+  the sequence functions `count` `find` `position` (each with `-if`, `-if-not`),
+  `reduce`, `every`, `some`, `notany`, `notevery` (keywords as in CLHS; a literal
+  `fn` argument is inlined; called short of its sequence, a function of it),
   `defmethod`, `with-slots`, `princ-to-string`, `most-positive-fixnum`,
   `double-float-positive-infinity`.
   Types: `fixnum` (32-bit everywhere), `(signed-byte 53)`, `fixnum-vector`,

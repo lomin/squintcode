@@ -20,9 +20,11 @@ H39–H54).
 a function and stay fast? On V8 only with one closure that assigns nothing; on
 Dart never (§9.10, H55–H58). Nothing in ucl changed; §13 records what would.
 
-**Sequence functions** (2026-10-03, a fourth grilling session, in progress):
-Common Lisp's sequence functions over vectors, each inlining a literal `fn` at
-expansion. Designed, not built (§4.2, D44–D52, §9.11).
+**Sequence functions** (2026-10-03, a fourth grilling session): Common Lisp's
+sequence functions over vectors, each inlining a literal `fn` at expansion.
+The query slice is built -- `count`, `find`, `position` (with `-if`,
+`-if-not`), `reduce`, `every`, `some`, `notany`, `notevery`; the rest is
+designed (§4.2, D44–D52, §9.11, §9.13, I40–I44, H70–H72).
 
 **`ucl/loop` and blocks** (2026-10-03, a fifth grilling session): Common
 Lisp's `LOOP` over vectors, numbers and hash tables, and its block model --
@@ -302,7 +304,7 @@ assigning one is a compile-time error naming it (D31).
   `ucl/dotimes`, `with-slots`), and that `case` constants are not evaluated. It
   does not expand user macros (§13).
 
-### 4.2 Sequence functions (D44–D52) -- designed, not built
+### 4.2 Sequence functions (D44–D52) -- the query slice built, the rest designed
 
 A **sequence function** is one of Common Lisp's functions over sequences: CLHS
 Chapter 17 and `every`, `some`, `notany`, `notevery` (§5.3). In ucl a sequence
@@ -369,6 +371,15 @@ exercised. In parallel, the native bulk operations D45 needs are measured
 (`fill`, `replace`, `sort`). Each function ships with kernels in
 `test/ucl/kernels.cljc` under I12 and I19, and one ported solution measured
 against its `loop`/`recur` version.
+
+**Built: the query slice** (`shared/ucl/seq.cljc`, suite
+`test/ucl/sequences_test.cljc`). Its kernels compile to the loop written by
+hand -- the predicate in the ternary, no IIFE, no ClojureDart runtime -- and a
+`ucl/let` init runs as a statement. What implementing settled is I41–I44:
+the registry entry applies only to a call through ucl's alias (I41); a
+literal `fn`'s body takes its continuation into its tail (I42); `eql` and a
+run-time failure are two backend operations (I43); and an empty `reduce`
+without `:initial-value` decides an operator's value at compile time (I44).
 
 ### 4.3 `ucl/loop` and blocks (D53–D62) -- built, but hash-table iteration (§13)
 
@@ -1337,6 +1348,12 @@ Found by the native bulk-operation measurement (§9.13; Node 24.16.0, Dart 3.13.
   the loop (3× AOT for `fillRange`); `List.sort`, with or without a
   comparator, is 4–7× slower than an inline merge sort.
 
+Found while building the query slice (Squint 0.14.211):
+
+- **H72** — Squint compiles a call of an inline operator with no arguments,
+  `(-)`, to `()`: invalid JavaScript, which fails the module, not the call.
+  Clojure and Common Lisp signal an arity error at run time.
+
 ## 11. Decision log
 
 "Evidence" means a measurement or probe decided it; "user judgement" means it
@@ -1442,6 +1459,10 @@ Made while building v1, not in the grilling session; each is reversible.
 | I28 | An expansion writes ucl's forms through the alias the caller wrote `ucl/loop` with (`ucl/elt`, `ucl/let`, `ucl/block`), and they expand later where the environment is right (I23) | they resolve exactly as the caller's own code; no host needs a fully qualified macro name |
 | I29 | Conformance (D60) is `ucl/conformance.clj`: every `(is (= expected form))` in a `deftest` named `*-conformance-test` is translated to Common Lisp -- ucl's names through the alias, vectors, numbers, booleans and a table of Clojure functions; anything else fails the run -- evaluated per case on SBCL and ECL, and its printed value compared with `expected`. The four hosts run the same assertions as tests, so all six agree. `ucl/run-tests.sh` runs it as a fifth host, `cl` | the cases are written once, where they already are; any vocabulary (the sequence functions too) joins by naming a deftest |
 | I40 | D45 per operation (§9.13): JS `fill` is `.fill` (either container); JS `replace` and Dart `replace` copy natively when both vectors are typed (`set`/`setRange`, checked at run time), else loop; `subseq`/`copy-seq` are `.slice`/`.sublist`; `sort`/`stable-sort` expand to one shared bottom-up merge sort with the predicate inlined, except JS with `<` (or `#'<`) on a `fixnum-vector`/`sb53-vector` that is a typed array at run time, which calls the native sort; Dart `fill` and everything on the JVM expand to loops | the measurement: native wins only where it copies memory or sorts typed numbers without a comparator; a run-time `ArrayBuffer.isView` check because a declared `fixnum-vector` may be a plain `Array` (H70) |
+| I41 | A sequence function's registry entry applies only to a call through a namespace other than Clojure's own, with every argument: entries are keyed by bare name, and `(count v)` or `(reduce + xs)` in a `ucl/let` body is Clojure's. A curried form is a function value, bound, not tailed | the walker and D35 must not expand Clojure's namesakes; clients always use the alias (D25) |
+| I42 | A literal `fn`'s body is written into the loop with its continuation -- the `if` of a test, the `recur` of a fold -- pushed into the tail of its `let`s and `do`s, unless a name the body binds occurs in the continuation's code; then the body stays an expression | written as it is, an `if` test or a `recur` argument ending in `let` is an expression-position `let`: an IIFE per element on Squint (H22) |
+| I43 | Two backend operations, `:seqfn :eql` (Squint `===`, ClojureScript `keyword-identical?`, JVM `Util/equiv`, Dart `==`) and `:seqfn :fail` (the hosts' existing `fail` helpers, an `ex-info` on the JVM) | D52's value equality per host; a run-time error without reaching a host's runtime library on Dart |
+| I44 | An empty `reduce` without `:initial-value` calls its function with no arguments; for an operator that is decided at compile time: `+` is 0, `*` is 1, `-`, `/`, comparisons, `min` and `max` signal at safety ≥ 1 (nil at 0) | H72; ucl's `min`/`max` are macros on some hosts and refuse no arguments when expanded |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1595,6 +1616,13 @@ backend selection by source root; mutable host collections only.
   function otherwise (D21's pattern), and a `ucl/loop` subset (D33). Neither
   is built; the variable walker must know them, as it knows `ucl/dotimes`
   (above).
+- **Sequence functions, v1 limits.** Keyword arguments must be literal keywords
+  (a macro decides at expansion which it was given). `:start` greater than
+  `:end` is not signalled -- the range is empty -- while CLHS requires an
+  error; an `:end` past the length is signalled by `elt` at safety ≥ 1. A
+  curried form inlined into a predicate is a loop in an `if` test: an IIFE on
+  Squint (D51). Not built yet: everything after the query slice (D44), with
+  the native operations of I40.
 - **Compiler passes** (D51). A sequence function or a `ucl/loop` in
   expression position is an IIFE on Squint (§9.11). A pass over a `ucl/defun`
   body could compute it into a temporary before its statement -- lifting with
