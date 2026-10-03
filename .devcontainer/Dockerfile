@@ -6,6 +6,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # - openjdk: Clojure/ClojureScript compilation and JVM tests
 # - rlwrap: required by the `clj` launcher script
 # - unzip: needed to install clj-kondo and the Dart SDK
+# - sbcl, ecl: Common Lisp references for ucl's semantics
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
@@ -13,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     openjdk-21-jdk-headless \
     ripgrep \
     rlwrap \
+    sbcl \
+    ecl \
     sudo \
     unzip \
     xz-utils \
