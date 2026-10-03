@@ -1370,6 +1370,8 @@ Made while building v1, not in the grilling session; each is reversible.
 | I20 | The `dotimes` counter is hinted through a `:types :local-hint` op: `int` on Dart, `number` on ClojureScript, nothing on Squint and the JVM | Clojure refuses a hint on a local bound to a primitive literal |
 | I21 | `princ-to-string` and `:element-type 'string` | fizzbuzz on Dart: `str` reaches the runtime (H50), and the result must be a `List<String>` |
 | I22 | `bb build` analyzes each submission with LeetCode's `ListNode`/`TreeNode` beside it; warnings (unnecessary casts) pass | D43; it also catches any bundler bug |
+| I23 | An expander registry: a ucl form that expands to a loop registers `{:applies? :expand}` by name -- the contract its own (`dotimes`), a vocabulary file its entries through `defapi`'s `:vocabularies`, reaching the backend map as `:expanders`. Return-position assignment (D35) and the walker consult it; an expander must not read `&env`, since an enclosing form may expand it | `ucl/loop` (D59) and the sequence functions (D51) both need D35 and the walker without editing them; the walker expanding an unknown form before walking it keeps its bindings' shadowing right |
+| I24 | `expand-counted-loop` -- `dotimes`' loop without its parsing (and, with D56, without its block) -- is the counted iteration every vocabulary expands to | a sequence function's inlined `fn` must not see a `nil` block of ucl's own (D56) |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;

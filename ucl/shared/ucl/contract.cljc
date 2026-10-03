@@ -523,6 +523,7 @@
 ;; body: with-slots' slot names and ucl/let's variables. Its env:
 ;;   :subst     {name {:read (fn [name] form) :place (fn [name] place-form)}}
 ;;   :shadowed  names rebound inside the body, which no longer refer to them
+;;   :backend   the backend, to expand a registered form it does not know
 ;; A free reference becomes its read; a reference used as the place of
 ;; setf/incf/decf becomes its place. Operator position is left alone: as with
 ;; Common Lisp's symbol-macrolet, a slot named `next` does not capture
@@ -556,6 +557,84 @@
   [form]
   (when (and (seq? form) (seq form) (symbol? (first form)))
     (name (first form))))
+
+(defn ^:macro-support mentions?
+  "Does `form` contain any of the symbols `syms`?"
+  [form syms]
+  (cond (symbol? form) (contains? syms form)
+        (map? form)    (boolean (some #(mentions? % syms) (concat (keys form) (vals form))))
+        (coll? form)   (boolean (some #(mentions? % syms) form))
+        :else false))
+
+(defn ^:macro-support expand-counted-loop
+  "A loop of `v` from 0 below `n`, which is evaluated once, running `body`
+   (statements); then `result`, evaluated with `v` bound to `n` (nil if
+   omitted). ucl/dotimes and every vocabulary that counts expand to this."
+  [backend v n result body]
+  (let [[binds lim] (if (trivial? n) [[] n] (let [g (gensym "n")] [[g n] g]))]
+    (wrap-let binds
+              ;; the counter is a fixnum; a host that types locals by hint
+              ;; (ClojureDart) would otherwise leave it dynamic
+              (list 'loop [(let [h ((op backend :types :local-hint) :fixnum)]
+                             (if h (vary-meta v assoc :tag h) v))
+                           0]
+                    (list 'if (list '< v lim)
+                          (list* 'do (concat body [(list 'recur (list 'inc v))]))
+                          (cond (nil? result)                 nil
+                                (mentions? result #{v})       (list 'let [v lim] result)
+                                :else                         result))))))
+
+(defn ^:macro-support expand-dotimes
+  "(dotimes (var count [result]) body...): var runs from 0 below count, which
+   is evaluated once; result is evaluated with var bound to count."
+  [backend spec body]
+  (when-not (and (seq? spec) (symbol? (first spec)) (<= 2 (count spec) 3))
+    (fail! (str "dotimes takes (dotimes (var count [result]) body...), not " (pr-str spec))
+           {:spec spec}))
+  (let [[v n result] spec
+        [decls body] (split-with declare-form? body)]
+    (declared-types decls)
+    (expand-counted-loop backend v n result body)))
+
+;; ===========================================================================
+;; The expander registry
+;; ===========================================================================
+;; A ucl form that expands to a loop -- ucl/dotimes, ucl/loop, a sequence
+;; function -- is registered by its operator's name with
+;;   {:applies? (fn [form] ..)   ; tells it apart from a namesake (Clojure's loop)
+;;    :expand   (fn [backend form] expansion)}
+;; Return-position assignment (D35) runs a registered form as a statement by
+;; expanding it and assigning its expansion's return positions; the walker
+;; expands one it does not know before walking it, so the names its expansion
+;; binds shadow as they should.
+;;
+;; An expander is called with the backend of the macro that triggered it,
+;; which may be an enclosing form: it must not read the lexical environment.
+;; What needs a local's type, it emits as a ucl form (`elt`, `length`,
+;; `make-array`), which expands later where the environment is right.
+;;
+;; The contract registers its own forms here; a vocabulary in its own file
+;; hands defapi a fn returning its entries (`:vocabularies`), which reach the
+;; backend map as `:expanders`.
+
+(defn ^:macro-support builtin-expanders []
+  {"dotimes" {:applies? (fn [form] (seq? (second form)))
+              :expand   (fn [backend form] (expand-dotimes backend (second form) (nnext form)))}})
+
+(defn ^:macro-support add-expanders
+  "The backend map with the expanders of `vocabularies` (maps of entries)."
+  [backend vocabularies]
+  (update backend :expanders (fn [m] (apply merge m vocabularies))))
+
+(defn ^:macro-support registered
+  "The registry entry that applies to `form`, or nil."
+  [backend form]
+  (let [n (head-name form)
+        e (when n (get (merge (builtin-expanders) (:expanders backend)) n))]
+    (when (and e ((:applies? e) form)) e)))
+
+(defn ^:macro-support expand-registered [backend form]
+  ((:expand (registered backend form)) backend form))
 
 (defn ^:macro-support shadow [env syms]
   (update env :shadowed into syms))
@@ -683,6 +762,9 @@
                                        (walk env a)))
                                    args)))
 
+                (and (:backend env) (registered (:backend env) form))
+                (walk env (expand-registered (:backend env) form))
+
                 :else (cons (if (symbol? head) head (walk env head)) (lmap #(walk env %) args)))))
           (walk [env form]
           (cond
@@ -706,7 +788,8 @@
                                            [v {:read  (fn [_] (read [o s] [obj s]))
                                                :place (fn [_] (list 'slot-value o (list 'quote s)))}])
                                          entries))
-                 :shadowed #{}}]
+                 :shadowed #{}
+                 :backend  backend}]
     (apply wrap-let binds (lmap #(walk env %) body))))
 
 ;; ===========================================================================
@@ -731,61 +814,33 @@
                               [v {:read  (fn [_] (read [v t] [v t]))
                                   :place (fn [_] (list '%var v t))}]))
                           vars))
-     :shadowed #{}}))
+     :shadowed #{}
+     :backend  backend}))
 
 (defn ^:macro-support assigned-vars
   "The names among `candidates` that `body` assigns with setf/incf/decf."
-  [candidates body]
+  [backend candidates body]
   (let [hits (atom #{})
         env  {:subst (into {} (map (fn [v] [v {:read  (fn [s] s)
                                                 :place (fn [s] (swap! hits conj s) s)}])
                                    candidates))
-              :shadowed #{}}]
+              :shadowed #{}
+              :backend  backend}]
     (doseq [f body] (walk env f))
     @hits))
 
-(defn ^:macro-support mentions?
-  "Does `form` contain any of the symbols `syms`?"
-  [form syms]
-  (cond (symbol? form) (contains? syms form)
-        (map? form)    (boolean (some #(mentions? % syms) (concat (keys form) (vals form))))
-        (coll? form)   (boolean (some #(mentions? % syms) form))
-        :else false))
-
 (defn ^:macro-support compound?
   "An init that ucl/let runs as a statement rather than binding as a value."
-  [form]
-  (contains? #{"if" "if-not" "when" "when-not" "cond" "case" "do" "let" "let*"
-               "loop" "loop*" "dotimes" "with-slots"}
-             (head-name form)))
+  [backend form]
+  (or (contains? #{"if" "if-not" "when" "when-not" "cond" "case" "do" "let" "let*"
+                   "loop" "loop*" "with-slots"}
+                 (head-name form))
+      (some? (registered backend form))))
 
 (defn ^:macro-support always-true?
   "A cond test that is always true, such as :else."
   [form]
   (or (keyword? form) (true? form)))
-
-(defn ^:macro-support expand-dotimes
-  "(dotimes (var count [result]) body...): var runs from 0 below count, which
-   is evaluated once; result is evaluated with var bound to count."
-  [backend spec body]
-  (when-not (and (seq? spec) (symbol? (first spec)) (<= 2 (count spec) 3))
-    (fail! (str "dotimes takes (dotimes (var count [result]) body...), not " (pr-str spec))
-           {:spec spec}))
-  (let [[v n result] spec
-        [decls body] (split-with declare-form? body)
-        _ (declared-types decls)
-        [binds lim] (if (trivial? n) [[] n] (let [g (gensym "n")] [[g n] g]))]
-    (wrap-let binds
-              ;; the counter is a fixnum; a host that types locals by hint
-              ;; (ClojureDart) would otherwise leave it dynamic
-              (list 'loop [(let [h ((op backend :types :local-hint) :fixnum)]
-                             (if h (vary-meta v assoc :tag h) v))
-                           0]
-                    (list 'if (list '< v lim)
-                          (list* 'do (concat body [(list 'recur (list 'inc v))]))
-                          (cond (nil? result)                 nil
-                                (mentions? result #{v})       (list 'let [v lim] result)
-                                :else                         result))))))
 
 (defn ^:macro-support assign-tails
   "`form` as a statement whose every return position calls `assign` on the
@@ -825,8 +880,8 @@
       (let [[decls body] (split-with declare-form? (rest args))]
         (list* head (first args) (concat decls (body-tail body))))
 
-      (and (= "dotimes" n) (seq? (first args)))
-      (tail (expand-dotimes backend (first args) (rest args)))
+      (registered backend form)
+      (tail (expand-registered backend form))
 
       (= "with-slots" n)
       (list* head (first args) (second args) (body-tail (drop 2 args)))
@@ -863,7 +918,7 @@
         plan  (vec (map-indexed
                     (fn [i [v init]]
                       (cond
-                        (compound? init)
+                        (compound? backend init)
                         {:v v :init init :step :compound :g (gensym (name v))}
 
                         ;; bound to a temporary when the final binding would see
@@ -871,7 +926,7 @@
                         ;; compound init's statement
                         (and (not (literal? init))
                              (or (mentions? init (set (take i names)))
-                                 (some (fn [[_ x]] (compound? x)) (drop (inc i) bs))))
+                                 (some (fn [[_ x]] (compound? backend x)) (drop (inc i) bs))))
                         {:v v :init init :step :temp :g (gensym (name v))}
 
                         :else {:v v :init init :step :direct}))
@@ -920,7 +975,7 @@
 (defn ^:macro-support with-assignable
   "`body`, with every parameter among `params` that it assigns made a variable."
   [backend params types body]
-  (let [assigned (assigned-vars params body)]
+  (let [assigned (assigned-vars backend params body)]
     (if (empty? assigned)
       body
       [(expand-parallel backend (mapv (fn [p] [p p]) (filter #(contains? assigned %) params))
@@ -954,7 +1009,7 @@
   (let [{:keys [kind kinds]} (place-spec place)
         once? (get-in backend [kind :write-once?])
         [binds refs srcs] (plan-args kinds (rest place) place (not once?))]
-    (if (and (= kind :var) (compound? value))
+    (if (and (= kind :var) (compound? backend value))
       (assign-tails backend value
                     (fn [x] ((op backend kind :write) refs srcs (check-value backend (second refs) x))))
       (expand-simple-write backend kind once? binds refs srcs value))))
@@ -1006,9 +1061,13 @@
 (defmacro defapi
   "Generate every contract macro in the calling namespace.
    `opts` -- `{:inline-extrema? true}` when the host defines min/max as inline
-   functions instead of macros."
+   functions instead of macros; `:vocabularies`, the fns (symbols, through an
+   alias the backend declares) returning each vocabulary's registry entries."
   ([emit-form] `(defapi ~emit-form {}))
   ([emit-form opts]
+   (let [emit-form (if (seq (:vocabularies opts))
+                     `(~'contract/add-expanders ~emit-form [~@(map list (:vocabularies opts))])
+                     emit-form)]
    `(do
       (defmacro ~'elt
         "(elt sequence index) -- read an element; a place for setf."
@@ -1098,7 +1157,7 @@
            `(defmacro ~'max
               "(max real...) -- inline in call position, a function as a value."
               [& ~'args]
-              (~'contract/expand-extremum ~emit-form :max ~'args))]))))
+              (~'contract/expand-extremum ~emit-form :max ~'args))])))))
 
 (defmacro defruntime
   "The contract's run-time definitions, in the calling namespace.
