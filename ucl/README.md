@@ -24,6 +24,11 @@ Dart never (§9.10, H55–H58). Nothing in ucl changed; §13 records what would.
 Common Lisp's sequence functions over vectors, each inlining a literal `fn` at
 expansion. Designed, not built (§4.2, D44–D52, §9.11).
 
+**`ucl/loop` and blocks** (2026-10-03, a fifth grilling session): Common
+Lisp's `LOOP` over vectors, numbers and hash tables, and its block model --
+`block`, `return-from`, `return` -- with every exit compiled statically.
+Designed, not built (§4.3, D53–D62, §9.12, H59–H62).
+
 ```bash
 ucl/run-tests.sh           # the ucl suite on Clojure, ClojureScript, Squint, ClojureDart
 bb test                    # that, then every solution on all four hosts
@@ -35,7 +40,8 @@ decision is measured against, each decision and what decided it, the
 measurements behind them, what was rejected, and what was got wrong on the way.
 Decisions `D1`–`D28` are numbered after the first grilling session's question
 that settled them (a gap is a question folded into another); `D29`–`D37` come
-from the second, on variables; `D38`–`D43` from the third, on ClojureDart.
+from the second, on variables; `D38`–`D43` from the third, on ClojureDart;
+`D53`–`D62` from the fifth, on `ucl/loop` and blocks.
 
 ---
 
@@ -222,8 +228,7 @@ meaning.
 
 **Loops are Clojure's own `loop`/`recur`** with `elt`/`length` (D20), plus
 `ucl/dotimes` (D33). They compile to a plain `while` on every host. `aloop` and
-`forv` are retired; a Common Lisp `LOOP` subset (`ucl/loop`) stays reserved
-until a solution needs more than `dotimes` and a "while" loop (D33).
+`forv` are retired. A Common Lisp `LOOP` (`ucl/loop`) is designed (§4.3).
 
 **A loop's state lives in variables** (§4.1): an inner loop is a statement that
 assigns them, and a loop's value is bound with `ucl/let`, never with `let`.
@@ -361,10 +366,110 @@ exercised. In parallel, the native bulk operations D45 needs are measured
 `test/ucl/kernels.cljc` under I12 and I19, and one ported solution measured
 against its `loop`/`recur` version.
 
+### 4.3 `ucl/loop` and blocks (D53–D62) -- designed, not built
+
+`ucl/loop` is Common Lisp's `LOOP` (CLHS 6.1) for what ucl has: vectors,
+numbers, hash tables. It exists to make a solution short without making it
+slower: its clauses expand to the `while` loop with assigned variables that
+§9.8 measured as hand-written.
+
+```clojure
+(ucl/defun maxProfit (prices)
+  (declare (type fixnum-vector prices))
+  (ucl/loop for p across prices
+            minimize p into lo of-type fixnum
+            maximize (- p lo)))
+
+(ucl/defun numSubarraysWithSum (nums goal)
+  (declare (type fixnum-vector nums))
+  (let [freq (ucl/make-array (inc (ucl/length nums)) :element-type 'fixnum)]
+    (ucl/setf (ucl/elt freq 0) 1)
+    (ucl/loop for x across nums
+              sum x into s of-type fixnum
+              when (>= s goal) sum (ucl/elt freq (- s goal))
+              do (ucl/incf (ucl/elt freq s)))))
+```
+
+- **Scope** (D53): every clause of CLHS 6.1 that needs no data type ucl
+  lacks -- the rule the sequence functions follow (D44), an exception to D8.
+  `ucl/loop` grows with the data model: `across` takes strings once ucl has
+  characters, with no change to `ucl/loop`.
+
+  | CLHS 6.1 | clauses | |
+  |---|---|---|
+  | 6.1.1 | simple `(loop form*)`, `named` | in |
+  | 6.1.1.7 | destructuring | out: its patterns are conses |
+  | 6.1.2.1.1 | `for` arithmetic: `from upfrom downfrom to upto below downto above by` | in |
+  | 6.1.2.1.2–3 | `for … in`, `for … on` | out: lists |
+  | 6.1.2.1.4 | `for x = e [then e2]` | in |
+  | 6.1.2.1.5 | `for x across v` | in |
+  | 6.1.2.1.6 | `being the hash-keys`/`hash-values of h [using …]` | in (D58) |
+  | 6.1.2.1.7 | package symbols | out: packages |
+  | 6.1.2.2 | `with` | in, without destructuring |
+  | 6.1.3 | `count sum maximize minimize`, `into`, `of-type` | in |
+  | 6.1.3 | `collect append nconc` | out: they build lists |
+  | 6.1.4 | `while until repeat always never thereis`, `loop-finish` | in |
+  | 6.1.5–6 | `do`, `return`, `if when unless else end`, `it` | in |
+  | 6.1.7 | `initially`, `finally` | in |
+
+- **Expansion** (D54): one shared expansion in the contract, over ucl's own
+  forms -- `ucl/let` and `loop`/`recur` -- with no backend operation but the
+  hash-table iterator (D58). A `for` name is a local, stepped by `recur`:
+  assigning it is a compile-time error, which Common Lisp, leaving it
+  undefined, allows. A `with` or `into` name is a variable. The variable
+  walker learns `ucl/loop`'s and `block`'s bindings, as it knows
+  `ucl/dotimes`'.
+- **Blocks** (D56): Common Lisp's block model, in the contract. `block`,
+  `return-from` and `return`; `ucl/loop` and `ucl/dotimes` establish a block
+  named `nil`, `ucl/defun` and `ucl/defmethod` one named after the function.
+  `(return-from twoSum (pair i j))` inside two `ucl/dotimes` leaves the
+  function.
+- **Exits are static** (D55). An exit is accepted only where the expansion can
+  make it the end of its block by restructuring: in statement or return
+  position, through `if`, `when`, `unless`, `cond`, `case`, `do`, `let`,
+  `ucl/let` and nested ucl blocks. `A (when c (return x)) B` becomes
+  `A (if c <exit with x> (do B <next iteration>))`. An exit through a nested
+  loop -- itself a statement of the outer block's body -- assigns a result
+  variable and a flag, ends the inner loop, and the outer block tests the flag
+  right after it. Anywhere else -- an argument, an `fn`, an inner Clojure
+  `loop` -- it is a compile-time error naming the place. This is a second
+  boundary beside D53's: **a form ucl cannot compile to the host's own loop
+  without run-time cost is a compile-time error.** Exceptions would carry an
+  exit anywhere, but cost 1.7× to 40× on the submission hosts (§9.12).
+- **Accumulators** (D57). One without `into` is internal: a `recur` parameter,
+  typed by the host as today's solutions' sums are. `count` is a `fixnum`, as
+  SBCL and ECL declare it (H62). An `into` name is a variable under D34: `of-type`
+  declares it; undeclared it is SBCL's and ECL's `number` -- a boxed cell with
+  a warning on the JVM, a dynamic `Cell` on Dart. Two words on a named
+  accumulator, as SBCL code is written.
+- **Hash-table iteration** (D58) enters the contract through `being the
+  hash-keys`/`hash-values`; the iterator is the one host-specific part. The
+  order is unspecified and changing the table during the iteration undefined,
+  both as in Common Lisp; the JVM keeps `HashMap`, whose order differs from
+  the insertion order JS `Map` and Dart's `Map` keep, so a test that relies on
+  an order fails there. `maphash` waits for a solution that needs it (D8).
+- **Expression position** (D59): return-position assignment (D35) learns
+  `ucl/loop` and `block`, so a `ucl/let` init or a `setf` of a variable is a
+  statement; anywhere else an IIFE on Squint that `bb build` warns on, as D51.
+- **Conformance** (D60): every `ucl/loop` and block case of the suite runs on
+  SBCL and ECL too, and `ucl/run-tests.sh` fails unless all six agree. Where
+  SBCL and ECL disagree and the standard is silent, the form is rejected (D2).
+- **Rejections** (D61) name the clause or form, the reason -- a data type ucl
+  lacks, or an exit that cannot be static -- and what to write instead:
+  "`for … in` iterates a list; ucl has no lists: use `for … across`".
+- **Proof** (D62): every solution with a loop is ported to `ucl/loop` beside
+  its original -- `<problem>_loop.cljc`, `squintcode.<problem>-loop`, the same
+  LeetCode names, so `bb build` makes both submissions. One test file states
+  the cases once and checks both. A port has no IIFE (I12) and reaches no
+  ClojureDart runtime (I19), and is measured against its original on V8, Dart
+  JIT and Dart AOT (as §9.7): it may not be slower. That also measures the
+  exit flag (D56) and the hash-table iteration step (D58).
+
 ### Not in v1
 
-Multiple values (`multiple-value-bind`), `mulmod`, hash-table iteration and
-deletion, `ucl/loop`, `aref` (reserved), CLOS `defclass`, `:test 'equal`.
+Multiple values (`multiple-value-bind`), `mulmod`, hash-table deletion,
+`maphash`, `aref` (reserved), CLOS `defclass`, `:test 'equal`. Hash-table
+iteration and `ucl/loop` are designed (§4.3).
 
 ## 5. Arrays and types
 
@@ -908,6 +1013,41 @@ a third to a half around a short one, more when captured variables move from
 registers into its context (H58). (The two statement forms differ by up to
 19% in the wrong direction -- a code-layout effect; compare within a pair.)
 
+### 9.12 Exits through exceptions (`bench/exit/`)
+
+Could `(return x)` be legal anywhere -- a throw caught at the block -- instead
+of only where it can be made static (D55)? A loop finding the first index
+from `s` whose element exceeds `x`, hand-written per host as ucl would
+compile each choice: `pos` returns statically; `pre` throws one preallocated
+object; `fresh` a new stackless one per exit (on the JVM `me.lomin/ex`'s
+`ex/exit`: a `RuntimeException` with `writableStackTrace` false); `error` an
+`Error` / `ex-info`, which records a stack trace. **short**: 10⁵ calls, each
+exiting after a few steps; **none**: one scan of 10⁶ elements that never
+exits -- the `try` is there, nothing is thrown. Warm medians, each variant
+alone in fresh processes (V8: Node 24.16.0, 7; Dart 3.13.5 arm64: 5; JVM
+OpenJDK 21: 3), µs. The JS covers Squint and ClojureScript, which both emit a
+plain `try`/`throw`.
+
+| host | short: `pos` | `pre` | `fresh` | `error` | none: `pos` | `pre` |
+|---|---|---|---|---|---|---|
+| V8 | 2311 | 11579 (5.0×) | 12109 | 329869 | 1210 | **2040 (1.7×)** |
+| Dart JIT | 1941 | 77698 (40×) | 77802 | 90826 | 830 | 821 |
+| Dart AOT | 4691 | 121421 (26×) | 124762 | 129570 | 1983 | 1990 |
+| JVM | 1414 | 1900 (1.3×) | 3142 (2.2×) | 817849 | 449 | 457 |
+
+- **The JVM** exits for 5 ns (preallocated) to 17 ns (`ex/exit`) when nothing
+  records a stack trace (H61) -- but it is a test host.
+- **V8 pays for the `try`**, thrown or not: 1.7× on a loop that never exits;
+  then ≈ 93 ns per exit (H59). A `try` moved into a wrapper function removed
+  it on one workload, not on the other.
+- **Dart pays for the throw**: ≈ 0.8 µs (JIT) to 1.2 µs (AOT) per exit,
+  whatever is thrown -- it records a stack trace for any object (H60). An
+  inner search loop with an exit, run once per element at n = 10⁵, adds
+  ≈ 100 ms.
+
+So an exception is cheap only on the host that submits nothing; D55 compiles
+exits statically or not at all.
+
 ## 10. Host facts
 
 Everything here was established by compiling and running, not by reading docs.
@@ -1115,6 +1255,24 @@ Found by the higher-order-function probe (§9.10; Node 24.16.0, Dart 3.13.5):
   over such values costs ≈3× a ternary (830 against 248 µs). Why `Math.max`
   suffers there and not in a loop (§9.6) is unmeasured.
 
+Found by the exit benchmark (§9.12; Node 24.16.0, Dart 3.13.5, OpenJDK 21,
+SBCL 2.2.9, ECL 21.2.1):
+
+- **H59** — V8: a `try` around a loop costs ≈ 1.7× on a 10⁶-element scan
+  that never throws (1210 against 2040 µs), and each throw ≈ 93 ns, whether
+  the thrown object is preallocated or fresh. An `Error`, which captures a
+  stack, ≈ 3.3 µs.
+- **H60** — The Dart VM: a `try` costs nothing; a throw costs ≈ 0.76 µs (JIT)
+  to 1.2 µs (AOT), the same for a preallocated object, a fresh one and an
+  `Error`.
+- **H61** — JVM: a `RuntimeException` built with `writableStackTrace` false
+  (`me.lomin/ex`'s `ex/exit`) costs ≈ 17 ns per throw fresh, ≈ 5 ns
+  preallocated; an `ex-info` ≈ 8 µs, filling in its stack trace. A `try`
+  costs nothing.
+- **H62** — SBCL and ECL type a `LOOP` accumulator without `of-type`: `sum`,
+  `maximize`, `minimize` as `number`, `count` as `fixnum`
+  (`(macroexpand-1 '(loop … sum x into s count x into c))`).
+
 ## 11. Decision log
 
 "Evidence" means a measurement or probe decided it; "user judgement" means it
@@ -1173,6 +1331,16 @@ was decided on reasoning, with the trade-offs on the table.
 | D50 | With two sequences, the curried form omits the one written, else the last; `&rest` sequences have none | user judgement |
 | D51 | A sequence function in expression position: a statement through D35, otherwise an IIFE that `bb build` warns on; lifting deferred to compiler passes | user judgement, evidence (§9.11) |
 | D52 | `eql` on strings compares by value on every host | CLHS leaves it to the implementation; identical results (as D10) |
+| D53 | `ucl/loop`: every clause of CLHS 6.1 that needs no data type ucl lacks; out: `for … in`/`on`, `collect`/`append`/`nconc`, destructuring, package iteration -- an exception to D8 | user judgement |
+| D54 | `ucl/loop` is one contract expansion over `ucl/let` and `loop`/`recur`; `for` names are locals, `with` and `into` names variables; the walker learns `ucl/loop` and `block` | user judgement |
+| D55 | An exit is accepted only where it can be made static; anywhere else a compile-time error: a form ucl cannot compile to the host's own loop without run-time cost is rejected | user judgement, evidence (§9.12) |
+| D56 | Common Lisp's block model in the contract: `block`, `return-from`, `return`; `ucl/loop` and `ucl/dotimes` establish `nil`, `ucl/defun`/`ucl/defmethod` their name; an exit through a nested loop by a result variable and a flag | heuristics 3, 2, 1 (decided by the agent at the user's request) |
+| D57 | A `ucl/loop` accumulator without `into` is a `recur` parameter; `count` is a `fixnum`; an `into` name is a variable under D34 (`of-type`, else `number`) | heuristic 3 (H62); D34 kept by the user |
+| D58 | Hash-table iteration enters the contract through `ucl/loop`'s `being the hash-keys`/`hash-values`; the iterator is a backend operation; order unspecified; `maphash` waits (D8) | heuristics 3, 2 (agent) |
+| D59 | Return-position assignment learns `ucl/loop` and `block`; elsewhere an IIFE `bb build` warns on, as D51 | heuristic 1 (agent) |
+| D60 | Every `ucl/loop` and block case also runs on SBCL and ECL; the suite fails unless all six agree; a form on which they disagree where the standard is silent is rejected | heuristic 3, D2 (agent) |
+| D61 | A rejection names the clause or form, the reason, and what to write instead | agent |
+| D62 | Every solution with a loop is ported to `ucl/loop` beside its original (`<problem>_loop.cljc`, same LeetCode names, shared test cases); a port passes I12/I19 and may not be slower | user judgement |
 
 ### Implementation decisions (I1–I21)
 
@@ -1280,6 +1448,22 @@ backend selection by source root; mutable host collections only.
 - **Patching ClojureDart's compiler at build time** (D43) -- tested and
   submitted code would be identical, but a third dependency on its internals,
   changing everything it generates.
+- **All of `LOOP`** (D53) -- its list, package and destructuring clauses need
+  data types ucl lacks; "full" would mean full Common Lisp.
+- **`ucl/loop` clauses as solutions need them** (D53, D8) -- a boundary nobody
+  can predict; each new solution would hit a missing clause.
+- **`collect` into an adjustable vector** (D53) -- a clause that compiles but
+  means something else than in Common Lisp.
+- **Exits by exceptions, everywhere or as a fallback** (D55) -- 1.7× on V8 for
+  the `try` alone, 26–40× per exit on Dart (§9.12); as a fallback, identical
+  code with a cost decided by where an exit happens to sit.
+- **`ucl/loop` alone establishing a block, or only the innermost loop
+  targetable** (D56) -- `ucl/dotimes`, which Common Lisp gives the same block,
+  would refuse a `return`: the "some parts work" a subset must avoid.
+- **Inferring an `into` accumulator's type** (D57) -- D34's reason: the result
+  would depend on what the body assigns.
+- **Replacing the original solutions** (D62) -- the user keeps both, so the
+  ports are measured against them.
 
 ## 13. Open items
 
@@ -1345,6 +1529,15 @@ backend selection by source root; mutable host collections only.
   it whatever that statement evaluates first, and stopping at a branch or an
   unexpanded user macro. Deferred: kept simple until a solution shows an IIFE
   on a hot path, then designed once for both vocabularies.
+- **`ucl/loop` and blocks** (D53–D62), designed, not built:
+  - The cost of an exit through a nested loop (one flag test per outer
+    iteration) and of a hash-table iteration step on each host is reasoned,
+    not measured; the ports measure both (D62).
+  - An exit is static only (D55): `(return x)` inside an `fn`, an argument or
+    an inner Clojure `loop` does not compile. Write the inner loop as a
+    `ucl/loop` or `ucl/dotimes`, or test with `thereis`/`always`/`never`.
+  - `across` waits for strings and characters in the contract.
+  - Hash-table iteration order differs on the JVM (D58).
 - **No JMH.** JVM numbers rest on simple shapes.
 - **The repository split** (`ucl`, `ucl-jvm`, `ucl-cljs`, `ucl-squint`) is laid
   out, not performed.
@@ -1419,6 +1612,7 @@ was a claim made without compiling or measuring first.
 | "ClojureDart's `and` costs ≈18% under the JIT" (H48, recorded as an open item) | The `late` on the local it forks into did (H54); every `if` in expression position paid it. Measured by removing one difference at a time, then fixed (D43). |
 | The prototype's typed `dotimes` counter | Overloaded `:hint`'s parameter count with `:local`: the JVM backend would have thrown, and Clojure refuses a hint there anyway. Became `:local-hint` (I20) before it shipped. |
 | Before the probe: "a function V8 inlines -- one closure, one call site -- costs close to nothing" | Only when the closure assigns nothing: one that assigns `ucl/let` variables costs 2–7× even inlined (§9.10, H58). |
+| `ucl/loop` grilling: "`minimize p of-type fixnum into lo`" | The type follows `into`: `minimize p into lo of-type fixnum`. SBCL refused the first; found by running §4.3's examples on SBCL and ECL before writing them down. |
 
 The pattern is unchanged from `setf`: every serious error was an inference made
 where a compile or a measurement would have answered the question.
