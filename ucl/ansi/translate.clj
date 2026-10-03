@@ -1,0 +1,456 @@
+#!/usr/bin/env bb
+;; The ANSI Common Lisp test suite (ansi-test.common-lisp.dev, Paul F. Dietz,
+;; MIT licence) as ucl tests (README §4.2, I46).
+;;
+;;   bb ucl/ansi/translate.clj
+;;
+;; Fetches the suite at a pinned commit into ucl/out/ansi-test, reads the
+;; files for the built sequence functions, and translates each test whose
+;; data ucl has -- vectors of numbers and symbols -- into ucl. Writes
+;;   ucl/test/ucl/ansi_sequences_test.cljc   the translated cases, as
+;;       *-conformance-test deftests: the four hosts run them, and
+;;       ucl/conformance.clj sends them back to SBCL and ECL (D60), which
+;;       checks the translation as well as ucl
+;;   ucl/ansi/REPORT.md                      per file: translated, skipped, why
+;; A test that is skipped names its reason; the reasons are the report.
+(require '[clojure.string :as str]
+         '[clojure.java.shell :refer [sh]]
+         '[babashka.fs :as fs])
+
+(def commit "ca06bd919661af162c67407c9d994e881870bdb3")
+(def repo "https://gitlab.common-lisp.net/ansi-test/ansi-test.git")
+(def root (str (fs/parent (fs/parent (fs/absolutize *file*)))))   ; ucl/
+(def suite (str root "/out/ansi-test"))
+
+(def files
+  ["sequences/count.lsp" "sequences/count-if.lsp" "sequences/count-if-not.lsp"
+   "sequences/find.lsp" "sequences/find-if.lsp" "sequences/find-if-not.lsp"
+   "sequences/position.lsp" "sequences/position-if.lsp" "sequences/position-if-not.lsp"
+   "sequences/reduce.lsp"
+   "data-and-control-flow/every.lsp" "data-and-control-flow/some.lsp"
+   "data-and-control-flow/notany.lsp" "data-and-control-flow/notevery.lsp"])
+
+(defn fetch! []
+  (when-not (fs/exists? (str suite "/.git"))
+    (fs/create-dirs suite)
+    (doseq [args [["init" "-q"] ["remote" "add" "origin" repo]
+                  ["fetch" "-q" "--depth" "1" "origin" commit] ["checkout" "-q" "FETCH_HEAD"]]]
+      (let [{:keys [exit err]} (apply sh "git" (concat args [:dir suite]))]
+        (when-not (zero? exit) (throw (ex-info (str "git " (str/join " " args) ": " err) {})))))))
+
+;; ---------------------------------------------------------------------------
+;; A Common Lisp reader, for what the suite's files use. Symbols are read as
+;; lower-case Clojure symbols, keywords as keywords; syntax ucl has no use for
+;; becomes a marker that makes its test skip.
+;; ---------------------------------------------------------------------------
+
+(defn unsupported [what] {:unsupported what})
+
+(defn read-cl [^String s]
+  (let [n (count s), pos (volatile! 0)]
+    (letfn [(peek* [] (when (< @pos n) (.charAt s @pos)))
+            (next* [] (let [c (peek*)] (vswap! pos inc) c))
+            (ws? [c] (and c (or (Character/isWhitespace ^char c))))
+            (skip! []
+              (loop []
+                (let [c (peek*)]
+                  (cond (ws? c) (do (next*) (recur))
+                        (= c \;) (do (while (and (peek*) (not= (peek*) \newline)) (next*)) (recur))
+                        (and (= c \#) (< (inc @pos) n) (= (.charAt s (inc @pos)) \|))
+                        (do (next*) (next*)
+                            (loop [depth 1]
+                              (when (pos? depth)
+                                (let [c (next*)]
+                                  (cond (and (= c \|) (= (peek*) \#)) (do (next*) (recur (dec depth)))
+                                        (and (= c \#) (= (peek*) \|)) (do (next*) (recur (inc depth)))
+                                        :else (recur depth)))))
+                            (recur))
+                        :else nil))))
+            (token []
+              (let [sb (StringBuilder.)]
+                (loop []
+                  (let [c (peek*)]
+                    (cond (nil? c) nil
+                          (= c \|) (do (next*)
+                                       (loop [] (let [d (next*)] (when (not= d \|) (.append sb (str "|" d)) (recur))))
+                                       (recur))
+                          (or (ws? c) (#{\( \) \' \" \;} c)) nil
+                          :else (do (.append sb (str/lower-case (str c))) (next*) (recur)))))
+                (str sb)))
+            (atom* [^String t]
+              (let [t (str/replace t #"\|(.)" "$1")]
+                (cond (re-matches #"[+-]?\d+\.?" t) (parse-long (str/replace t #"\.$" ""))
+                      (re-matches #"[+-]?\d+/\d+" t) (unsupported "ratio")
+                      (re-matches #"[+-]?\d*\.\d+([eEdDfF][+-]?\d+)?|[+-]?\d+[eEdDfF][+-]?\d+" t) (unsupported "float")
+                      (= t "nil") nil
+                      (str/starts-with? t ":") (keyword (subs t 1))
+                      :else (symbol (last (str/split t #"::?"))))))
+            (form []
+              (skip!)
+              (let [c (next*)]
+                (case c
+                  nil (throw (ex-info "eof" {}))
+                  \( (loop [xs []]
+                       (skip!)
+                       (if (= (peek*) \))
+                         (do (next*) (apply list xs))
+                         (let [x (form)]
+                           (if (= x '.) (let [t (form)] (skip!) (next*) (unsupported "dotted pair"))
+                               (recur (conj xs x))))))
+                  \) (throw (ex-info "unbalanced )" {:pos @pos}))
+                  \' (list 'quote (form))
+                  \` (do (form) (unsupported "backquote"))
+                  \, (do (when (= (peek*) \@) (next*)) (form) (unsupported "backquote"))
+                  \" (let [sb (StringBuilder.)]
+                       (loop [] (let [d (next*)]
+                                  (cond (= d \\) (do (.append sb (next*)) (recur))
+                                        (= d \") nil
+                                        :else (do (.append sb d) (recur)))))
+                       {:string (str sb)})
+                  \# (let [d (next*)]
+                       (case d
+                         \' (list 'function (form))
+                         \( (let [xs (form-list)] {:vector xs})
+                         \\ (let [ch (next*) more (token)] (unsupported "character"))
+                         \* (do (token) (unsupported "bit vector"))
+                         \p (do (form) (unsupported "pathname"))
+                         \P (do (form) (unsupported "pathname"))
+                         \. (do (form) (unsupported "read-time eval"))
+                         (\+ \-) (do (form) (form) (unsupported "feature expression"))
+                         (if (Character/isDigit ^char d)
+                           (do (while (Character/isDigit ^char (peek*)) (next*))
+                               (let [e (next*)] (when (#{\a \A} e) (form)) (unsupported (str "#" e))))
+                           (unsupported (str "#" d)))))
+                  (do (vswap! pos dec) (atom* (token))))))
+            (form-list []
+              (loop [xs []]
+                (skip!)
+                (if (= (peek*) \)) (do (next*) xs) (recur (conj xs (form))))))]
+      (loop [forms []]
+        (skip!)
+        (if (< @pos n) (recur (conj forms (form))) forms)))))
+
+;; ---------------------------------------------------------------------------
+;; Translation to ucl. Each fn returns the ucl form, or throws a skip whose
+;; message is the reason.
+;; ---------------------------------------------------------------------------
+
+(defn skip [reason] (throw (ex-info reason {:skip reason})))
+
+(def sequence-functions
+  #{'count 'count-if 'count-if-not 'find 'find-if 'find-if-not 'position 'position-if
+    'position-if-not 'reduce 'every 'some 'notany 'notevery})
+
+;; Common Lisp functions the suite passes or calls, and their Clojure; each
+;; is also in ucl/conformance.clj's table, which maps them back
+(def cl->clojure
+  {'identity 'identity, 'evenp 'even?, 'oddp 'odd?, 'not 'not, 'null 'nil?, (symbol "1+") 'inc, (symbol "1-") 'dec,
+   'zerop 'zero?, 'plusp 'pos?, 'minusp 'neg?, '+ '+, '- '-, '* '*, '< '<, '> '>, '<= '<=,
+   '>= '>=, '= '==, (symbol "/=") 'not=, 'max 'ucl/max, 'min 'ucl/min,
+   ;; on what the translated cases hold -- numbers, keywords, nil -- Clojure's
+   ;; = is eql (tests may use anything; solutions may not)
+   'eql '=, 'eq '=, 'eqt '=, 'equal '=, 'equalt '=, 'equalp '=})
+
+(def special #{'if 'when 'unless 'cond 'and 'or 'progn 'let 'let* 'setf 'incf 'decf 'lambda
+               'function 'quote 'values 'locally 'declare})
+
+(declare tr)
+
+(defn tr-symbol-data
+  "A quoted symbol is data: a keyword, which eql compares as Common Lisp
+   compares symbols."
+  [s]
+  (cond (= s 'nil) nil
+        (= s 't) true
+        (symbol? s) (keyword (name s))
+        (number? s) s
+        :else (skip "quoted data other than a symbol or number")))
+
+(defn tr-vector
+  "#(...) or a quoted list as :initial-contents: a general vector of numbers,
+   keywords and nil."
+  [xs]
+  (let [els (mapv (fn [x] (cond (or (nil? x) (number? x)) x
+                                (symbol? x) (tr-symbol-data x)
+                                (map? x) (skip (str "a vector of " (or (:unsupported x) "strings")))
+                                :else (skip "a nested list in a vector")))
+                  xs)]
+    (list 'ucl/make-array (count els) :initial-contents els)))
+
+(defn eql-value
+  "A function value that is eql (or eq, equal, eqt, ...): a literal fn, since
+   a bare `=` in value position is ambiguous to ucl/conformance.clj (LOOP's
+   keyword)."
+  [mapped]
+  (if (= mapped '=) '(fn [a b] (= a b)) mapped))
+
+(defn tr-fn-value [f]
+  (cond (and (seq? f) (= 'function (first f)))
+        (let [x (second f)]
+          (cond (symbol? x) (eql-value (or (cl->clojure x) (skip (str "the function " x))))
+                (and (seq? x) (= 'lambda (first x))) (tr x)
+                :else (skip "a function form")))
+        (and (seq? f) (= 'quote (first f)) (symbol? (second f)))
+        (let [m (or (cl->clojure (second f)) (skip (str "the function " (second f))))]
+          (if (= m '=) (eql-value m) (list 'quote m)))
+        :else (tr f)))
+
+(defn tr-lambda [[_ params & body]]
+  (when-not (and (seq? params) (every? symbol? params) (not-any? #(str/starts-with? (name %) "&") params))
+    (skip "a lambda list with &optional, &rest or &key"))
+  (list* 'fn (vec params) (map tr (remove #(and (seq? %) (= 'declare (first %))) body))))
+
+(defn tr-let [op [_ bindings & body]]
+  (list* (if (= op 'let) 'ucl/let 'ucl/let*)
+         (apply list (map (fn [b] (cond (symbol? b) (list b nil)
+                                        (= 1 (count b)) (list (first b) nil)
+                                        :else (list (first b) (tr (second b)))))
+                          bindings))
+         (map tr (remove #(and (seq? %) (= 'declare (first %))) body))))
+
+(defn tr-keyword-args [args]
+  (mapcat (fn [[k v]]
+            (when-not (keyword? k) (skip "a keyword argument that is not a literal keyword"))
+            [k (if (contains? #{:key :test :test-not} k) (if (nil? v) nil (tr-fn-value v)) (tr v))])
+          (partition 2 args)))
+
+(defn tr-call [[h & args :as f]]
+  (cond
+    (sequence-functions h)
+    (let [a0 (first args)
+          item? (contains? #{'count 'find 'position} h)]
+      (when (some nil? (if (#{'every 'some 'notany 'notevery} h) (rest args) [(second args)]))
+        (skip "a list (nil, the empty list, as a sequence)"))
+      (case h
+        (every some notany notevery)
+        (list* (symbol "ucl" (name h)) (tr-fn-value a0) (map tr (rest args)))
+        (let [[sq & kvs] (rest args)]
+          (when (odd? (count kvs)) (skip "an odd number of keyword arguments (a program-error)"))
+          (list* (symbol "ucl" (name h)) (if item? (tr a0) (tr-fn-value a0)) (tr sq) (tr-keyword-args kvs)))))
+    (and (= h 'make-array)
+         (let [ks (set (take-nth 2 (rest args)))] (and (ks :fill-pointer) (ks :initial-contents))))
+    ;; ucl v1 cannot fill a vector that has a fill pointer at construction;
+    ;; pushing the elements below the fill pointer builds the same sequence
+    (let [[n & kvs] args
+          m   (apply hash-map kvs)
+          ic  (let [v (:initial-contents m)] (if (and (seq? v) (= 'quote (first v))) (second v) v))
+          els (cond (map? ic) (if (:vector ic) (:vector ic) (skip "make-array of unsupported contents"))
+                    (seq? ic) ic
+                    :else (skip "computed :initial-contents"))
+          fp  (:fill-pointer m)
+          els (cond (= fp 't) els
+                    (integer? fp) (take fp els)
+                    :else (skip "a computed fill pointer"))
+          _   (when-not (every? #(#{:fill-pointer :initial-contents :adjustable} %) (keys m))
+                (skip "make-array with a fill pointer and other options"))
+          v   (gensym "v")]
+      (list* 'ucl/let (list (list v (list 'ucl/make-array 0 :adjustable true :fill-pointer 0)))
+             (concat (map (fn [x] (list 'ucl/vector-push-extend (tr-symbol-data x) v)) els) [v])))
+    (= h 'make-array)
+    (let [[n & kvs] args]
+      (list* 'ucl/make-array (tr n)
+             (mapcat (fn [[k v]]
+                       (case k
+                         :initial-contents [k (let [v (if (and (seq? v) (= 'quote (first v))) (second v) v)]
+                                                (cond (map? v) (if (:vector v) (vec (map tr-symbol-data (:vector v)))
+                                                                   (skip "make-array of unsupported contents"))
+                                                      (seq? v) (vec (map tr-symbol-data v))
+                                                      :else (skip "computed :initial-contents")))]
+                         :initial-element [k (tr v)]
+                         :element-type [k (let [t (second v)]
+                                            (cond (= t 't) ''t
+                                                  (= t 'fixnum) ''fixnum
+                                                  :else (skip (str "the element type " (pr-str t)))))]
+                         (:fill-pointer :adjustable) [k (tr v)]
+                         (skip (str "make-array " k))))
+                     (partition 2 kvs))))
+    (= h 'notnot) (list 'if (tr (first args)) true nil)
+    (cl->clojure h) (list* (cl->clojure h) (map tr args))
+    :else (skip (str "the function " h))))
+
+(defn tr [f]
+  (cond
+    (nil? f) nil
+    (number? f) f
+    (= f 't) true
+    (keyword? f) f
+    (symbol? f) f                                  ; a variable
+    (map? f) (cond (:vector f) (tr-vector (:vector f))
+                   (:string f) (skip "a string")
+                   :else (skip (:unsupported f)))
+    (seq? f)
+    (let [h (first f)]
+      (case h
+        quote (let [x (second f)]
+                (cond (symbol? x) (tr-symbol-data x)
+                      (seq? x) (skip "a list")
+                      (map? x) (tr x)
+                      :else x))
+        function (tr-fn-value f)
+        lambda (tr-lambda f)
+        (let let*) (tr-let h f)
+        progn (list* 'do (map tr (rest f)))
+        ;; Common Lisp's NOT returns T or NIL, Clojure's true or false
+        not (list 'if (tr (second f)) nil true)
+        (if when unless and or) (list* h (map tr (rest f)))
+        cond (list* 'cond (mapcat (fn [c] (let [[t & b] c]
+                                            [(if (= t 't) :else (tr t)) (if (next b) (list* 'do (map tr b)) (tr (first b)))]))
+                                  (rest f)))
+        (setf incf decf) (let [[place & more] (rest f)]
+                           (when-not (symbol? place) (skip (str h " of a place other than a variable")))
+                           (list* (symbol "ucl" (name h)) place (map tr more)))
+        ;; several values: a vector, evaluated left to right as values is
+        values (if (= 1 (count (rest f))) (tr (second f)) (list* 'vector (map tr (rest f))))
+        (not-mv) (list 'if (tr (second f)) nil true)
+        (notnot-mv) (list 'if (tr (second f)) true nil)
+        locally (let [body (remove #(and (seq? %) (= 'declare (first %))) (rest f))]
+                  (if (next body) (list* 'do (map tr body)) (tr (first body))))
+        signals-error (skip "an error test")
+        (if (symbol? h) (tr-call f) (skip "a call of a non-symbol"))))
+    :else (skip (str "the datum " (pr-str f)))))
+
+(defn tr-expected-1 [v]
+  (let []
+    (cond (or (number? v) (nil? v)) v
+          (= v 't) true
+          (symbol? v) (tr-symbol-data v)
+          (seq? v) (skip "an expected list")
+          (map? v) (skip (str "an expected " (if (:vector v) "vector" (or (:unsupported v) "string"))))
+          :else (skip (str "the expected " (pr-str v))))))
+
+(defn tr-expected
+  "One value, or several as a vector (see `values`)."
+  [vals]
+  (if (= 1 (count vals))
+    (tr-expected-1 (first vals))
+    (vec (map tr-expected-1 vals))))
+
+(defn translate-test
+  "{:name .. :case form} or {:name .. :skip reason}."
+  [[_ tname form & expected]]
+  (try
+    (let [e (tr-expected expected)
+          f (tr form)]
+      (pr-str f)                          ; realize every lazy part inside the try
+      {:name (str tname) :case (list 'is (list '= e f))})
+    (catch clojure.lang.ExceptionInfo ex
+      (if-let [r (:skip (ex-data ex))]
+        {:name (str tname) :skip r}
+        (throw ex)))))
+
+;; ---------------------------------------------------------------------------
+;; Validation on the JVM backend: a case ucl rejects at expansion is skipped
+;; with ucl's message (one would stop the whole file compiling on every
+;; host); a case that compiles but returns another value is held out and
+;; reported -- those are what to look at.
+;; ---------------------------------------------------------------------------
+
+(def validator
+  "(ns ansi-validate (:require [ucl.api :as ucl] [clojure.edn :as edn]))
+   (defn ucl-message [t]
+     (loop [e t] (cond (nil? e) nil
+                       (and (instance? clojure.lang.ExceptionInfo e) (= 'ucl (:library (ex-data e)))) (ex-message e)
+                       :else (recur (.getCause e)))))
+   (let [cases (edn/read-string (slurp (first *command-line-args*)))]
+     (prn (vec (for [[_ [_ [_ expected form]]] cases]   ; [name (is (= expected form))]
+                 (try (let [v (binding [*ns* (the-ns 'ansi-validate) *err* (java.io.StringWriter.)]
+                                (eval form))]
+                        (if (= expected v) [:ok] [:fails (pr-str v)]))
+                      (catch Throwable t
+                        (if-let [m (ucl-message t)] [:rejected m] [:throws (.toString t)])))))))")
+
+(defn validate!
+  "The JVM's verdict on each translated case."
+  [cases]
+  (let [dir (str root "/out/ansi")
+        in  (str dir "/cases.edn")
+        src (str dir "/validate.clj")]
+    (fs/create-dirs dir)
+    (spit in (pr-str cases))                     ; [[name (is (= expected form))] ...]
+    (spit src validator)
+    (let [{:keys [out err exit]} (sh "clojure" "-Sdeps" "{:paths [\"shared\" \"backends/jvm\" \"testkit/jvm\"]}"
+                                     "-M" src in :dir root)]
+      (when-not (zero? exit) (throw (ex-info (str "validation failed: " err) {})))
+      (read-string (last (str/split-lines out))))))
+
+;; ---------------------------------------------------------------------------
+;; Output
+;; ---------------------------------------------------------------------------
+
+(defn render
+  "A deftest with one `testing` per line."
+  [[_ tname & cases]]
+  (str "(deftest " tname "\n"
+       (str/join "\n" (for [c cases] (str "  " (binding [*print-namespace-maps* false] (pr-str c)))))
+       ")"))
+
+(defn deftests [file results]
+  (let [base (-> file fs/file-name (str/replace #"\.lsp$" ""))
+        cases (filter #(and (:case %) (not (:held %))) results)]
+    (map-indexed
+     (fn [i chunk]
+       (list* 'deftest (symbol (str "ansi-" base "-" (inc i) "-conformance-test"))
+              (map (fn [{:keys [name case]}] (list 'testing name case)) chunk)))
+     (partition-all 40 cases))))
+
+(defn reason-class [r]
+  (cond (str/starts-with? r "the function ") (str "uses a function ucl does not have (" (subs r 13) ")")
+        :else r))
+
+(defn -main []
+  (fetch!)
+  (let [per-file (vec (for [f files]
+                        (let [forms (read-cl (slurp (str suite "/" f)))
+                              tests (filter #(and (seq? %) (= 'deftest (first %))) forms)]
+                          [f (mapv translate-test tests)])))
+        cands    (vec (for [[_ rs] per-file r rs :when (:case r)] r))
+        verdicts (zipmap (map :name cands) (validate! (mapv (fn [r] [(:name r) (:case r)]) cands)))
+        per-file (vec (for [[f rs] per-file]
+                        [f (mapv (fn [r]
+                                   (let [[k m] (get verdicts (:name r))]
+                                     (case k
+                                       (nil :ok) r
+                                       :rejected {:name (:name r) :skip (str "ucl rejects at expansion: "
+                                                                            (first (str/split m #"\. ")))}
+                                       {:name (:name r) :held k :detail m :case (:case r)})))
+                                 rs)]))
+        out (str root "/test/ucl/ansi_sequences_test.cljc")]
+    (spit out
+          (str ";; GENERATED by ucl/ansi/translate.clj from the ANSI Common Lisp test suite\n"
+               ";; (ansi-test.common-lisp.dev, commit " commit "; Copyright 2004 Paul F. Dietz,\n"
+               ";; MIT licence). Do not edit: change the translator and run it again.\n"
+               ";; Each case keeps its ansi-test name; ucl/ansi/REPORT.md lists what was skipped.\n"
+               "(ns ucl.ansi-sequences-test\n"
+               "  (:require [ucl.test :refer [deftest is testing]]\n"
+               "            [ucl.api :as ucl]))\n\n"
+               (str/join "\n\n" (for [[f rs] per-file, d (deftests f rs)] (render d)))
+               "\n"))
+    (let [total (reduce + (map (comp count second) per-file))
+          done  (reduce + (map #(count (filter (fn [r] (and (:case r) (not (:held r)))) (second %))) per-file))
+          held  (for [[f rs] per-file r rs :when (:held r)] [f r])
+          reasons (frequencies (for [[_ rs] per-file r rs :when (:skip r)] (reason-class (:skip r))))]
+      (spit (str root "/ansi/REPORT.md")
+            (str "# The ANSI test suite on ucl's sequence functions\n\n"
+                 "Generated by `bb ucl/ansi/translate.clj` from ansi-test commit `" commit "`\n"
+                 "(README §4.2, I46). A translated case runs on the four hosts and, through\n"
+                 "`ucl/conformance.clj`, on SBCL and ECL. A skipped case needs what ucl does not\n"
+                 "have -- mostly lists, strings and characters -- or is an error test.\n\n"
+                 "**" done " of " total " tests translated.**\n\n"
+                 "| file | tests | translated | skipped |\n|---|---|---|---|\n"
+                 (str/join (for [[f rs] per-file]
+                             (str "| `" f "` | " (count rs) " | "
+                                  (count (filter #(and (:case %) (not (:held %))) rs)) " | "
+                                  (count (filter :skip rs)) " |\n")))
+                 (if (seq held)
+                   (str "\n## Held out: ucl's value differs\n\n"
+                        "Each compiles on ucl but returns another value on the JVM. Each is a deviation\n"
+                        "to fix or to record, not a pass.\n\n| test | ucl | case |\n|---|---|---|\n"
+                        (str/join (for [[_ r] held]
+                                    (str "| " (:name r) " | " (name (:held r)) " " (str/replace (str (:detail r)) "|" "\\|")
+                                         " | `" (str/replace (pr-str (:case r)) "|" "\\|") "` |\n"))))
+                   "\n## Held out\n\nNone: every translated case returns the suite's value on ucl.\n")
+                 "\n## Why tests were skipped\n\n| reason | tests |\n|---|---|\n"
+                 (str/join (for [[r c] (sort-by (comp - val) reasons)] (str "| " r " | " c " |\n")))))
+      (println done "of" total "tests translated; wrote" out))))
+
+(-main)

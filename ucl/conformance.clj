@@ -17,7 +17,23 @@
    'pos? "plusp", 'neg? "minusp", 'nil? "null", 'quot "truncate", 'rem "rem",
    'mod "mod", 'not "not", '+ "+", '- "-", '* "*", '< "<", '> ">", '<= "<=",
    '>= ">=", 'max "max", 'min "min", 'if "if", 'when "when", 'unless "unless",
-   'cond "cond", 'and "and", 'or "or", 'do "progn", 'return "return", 'list "list"})
+   'cond "cond", 'and "and", 'or "or", 'do "progn", 'return "return", 'list "list",
+   ;; the sequence functions' cases (README §4.2): on numbers, keywords and nil,
+   ;; Clojure's = is eql
+   'identity "identity", 'vector "vector", 'not= "/=", '= "eql"})
+
+(def special-heads
+  "Table entries never rendered as function values: operators, and `=`, which
+   is also LOOP's keyword (`for x = 1`). Pass eql as a value as (fn [a b] (= a b))."
+  '#{if when unless cond and or do return =})
+
+(defn function-name
+  "The Common Lisp function a Clojure symbol in value position names, or nil:
+   one of the table's functions, or ucl's min and max."
+  [f]
+  (cond (and (nil? (namespace f)) (contains? clojure->cl f) (not (special-heads f))) (clojure->cl f)
+        (and (= "ucl" (namespace f)) (contains? #{"min" "max"} (name f))) (name f)
+        :else nil))
 
 (defn fail [& msg] (binding [*out* *err*] (apply println msg)) (System/exit 1))
 
@@ -31,7 +47,8 @@
     (number? f) (str f)
     (string? f) (pr-str f)
     (keyword? f) (str f)
-    (symbol? f) (cond (= "ucl" (namespace f)) (name f)
+    (symbol? f) (cond (function-name f) (str "#'" (function-name f))
+                      (= "ucl" (namespace f)) (name f)
                       (namespace f) (fail "conformance: no Common Lisp for" f)
                       :else (str f))
     (vector? f) (if (every? #(or (number? %) (string? %)) f)
@@ -43,7 +60,10 @@
         (= 'let h)    (str "(let* (" (str/join " " (map (fn [[k v]] (str "(" (cl k) " " (cl v) ")"))
                                                         (partition 2 (first args))))
                            ") " (str/join " " (map cl (rest args))) ")")
-        (= 'quote h)  (str "'" (cl (first args)))
+        (= 'quote h)  (let [x (first args)]
+                        (str "'" (if (and (symbol? x) (function-name x)) (function-name x) (cl x))))
+        (contains? #{'fn 'fn*} h)
+        (str "(lambda (" (str/join " " (map cl (first args))) ") " (str/join " " (map cl (rest args))) ")")
         (and (symbol? h) (= "ucl" (namespace h)) (contains? #{"let" "let*"} (name h)))
         (str "(" (name h) " (" (str/join " " (map (fn [b] (if (seq? b)
                                                             (str "(" (cl (first b)) " " (cl (second b)) ")")
@@ -55,13 +75,15 @@
         (if (contains? clojure->cl h)
           (str "(" (str/join " " (cons (clojure->cl h) (map cl args))) ")")
           (fail "conformance: no Common Lisp for" h "in" (pr-str f)))
-        :else (str "(" (str/join " " (map cl f)) ")")))
+        :else (str "(" (str/join " " (cons (if (and (symbol? h) (= "ucl" (namespace h))) (name h) (cl h))
+                                           (map cl args))) ")")))
     :else (fail "conformance: no Common Lisp for" (pr-str f))))
 
 (defn printed
   "How Common Lisp's prin1 prints the Clojure value `v`."
   [v]
   (cond (nil? v) "NIL" (false? v) "NIL" (true? v) "T"
+        (keyword? v) (str/upper-case (str v))
         (vector? v) (str "#(" (str/join " " (map printed v)) ")")
         :else (str v)))
 
