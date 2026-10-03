@@ -22,9 +22,11 @@ Dart never (§9.10, H55–H58). Nothing in ucl changed; §13 records what would.
 
 **Sequence functions** (2026-10-03, a fourth grilling session): Common Lisp's
 sequence functions over vectors, each inlining a literal `fn` at expansion.
-The query slice is built -- `count`, `find`, `position` (with `-if`,
-`-if-not`), `reduce`, `every`, `some`, `notany`, `notevery`; the rest is
-designed (§4.2, D44–D52, §9.11, §9.13, I40–I44, H70–H72).
+Built: the query slice -- `count`, `find`, `position` (with `-if`,
+`-if-not`), `reduce`, `every`, `some`, `notany`, `notevery` -- and the
+second, `fill`, `replace`, `copy-seq`, `subseq`, `reverse`, `nreverse`,
+`sort`, `stable-sort`; the rest is designed (§4.2, D44–D52, §9.11, §9.13,
+I40–I47, H70–H72).
 
 **`ucl/loop` and blocks** (2026-10-03, a fifth grilling session): Common
 Lisp's `LOOP` over vectors, numbers and hash tables, and its block model --
@@ -388,13 +390,21 @@ JavaScript is identical but for two `const` aliases); Dart JIT 360 against
 362; Dart AOT 686 against **383** -- the expansion's counters are hinted
 `int` (I20), the hand-written `loop`'s are `dynamic`.
 
+**Built: the second slice** -- `fill`, `replace`, `copy-seq`, `subseq`,
+`reverse`, `nreverse`, `sort`, `stable-sort` (I47). At safety ≥ 1 each
+stores through the checked `setf` of `elt`; at safety 0 a native operation
+replaces the loop where I40 measured it faster. `sort` and `stable-sort` are
+one merge sort with the predicate inlined, its scratch vector a copy of the
+sequence; V8's typed sort replaces it for `<`, behind a run-time check
+(H70). Every sequence function now checks its bounding indices at safety ≥ 1.
+
 **Checked against the ANSI test suite** (I45, I46; `ucl/ansi/REPORT.md`). Of
-the 1,258 tests the suite has for these 14 functions, 166 use only data ucl
+the 1,622 tests the suite has for these 22 functions, 217 use only data ucl
 has -- vectors of numbers and symbols -- and translate; each passes on the
 four hosts and, translated back by `ucl/conformance.clj`, on SBCL and ECL.
-The rest need lists, bit vectors, characters or strings, multiple values
-beyond a few, or are error tests; the report counts each reason. Checking
-the shipped slice against the suite found four deviations, fixed by I45.
+The rest need lists, bit vectors, characters or strings, or are error tests;
+the report counts each reason. Checking the query slice against the suite
+found four deviations, fixed by I45.
 
 ### 4.3 `ucl/loop` and blocks (D53–D62) -- built, but hash-table iteration (§13)
 
@@ -1480,6 +1490,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I44 | An empty `reduce` without `:initial-value` calls its function with no arguments; for an operator that is decided at compile time: `+` is 0, `*` is 1, `-`, `/`, comparisons, `min` and `max` signal at safety ≥ 1 (nil at 0) | H72; ucl's `min`/`max` are macros on some hosts and refuse no arguments when expanded |
 | I45 | Found against the ANSI test suite: `:allow-other-keys` (leftmost wins) admits other keys, whose values are still evaluated; with other keys present its value must be a literal, else a compile-time error; every keyword value is evaluated, a repeated key's too; `'f` and `#'f` (`(var f)`) call the global `f`; a literal nil `:key` is identity | CLHS 3.4.1.4, 3.4.1.4.1, 1.4.1.5, 17.2.1; before, `'identity` was called as a Clojure symbol -- a map lookup, silently wrong |
 | I46 | `ucl/ansi/translate.clj` turns the ANSI test suite (pinned commit) into ucl tests: a Common Lisp reader, a translation of the vector subset (symbols become keywords, `#'f` Clojure's `f`, `values` a vector), a validation of each case on the JVM backend -- a case ucl rejects at expansion becomes a skip with ucl's message, one returning another value is held out and reported -- and output as `*-conformance-test`s, which `ucl/conformance.clj` runs on SBCL and ECL as well. Generated tests are committed; the translator is rerun by hand | the suite is Common Lisp and ucl is not: only a translation can use it; the round trip through SBCL and ECL checks the translation, the four hosts check ucl |
+| I47 | The second slice: a function's sequence may come first (`:seq-pos`), and a curried form splices it back there; `subseq`'s optional end makes only a one-argument call curried. At safety ≥ 1 stores go through the checked `setf` of `elt`, at safety 0 through the backend's `:seqfn` `:fill`, `:replace`, `:subseq` and `:sort-native`, nil where the loop is faster (I40). `replace` within one vector copies downward when its ranges overlap upward; `sort`'s scratch vector is `(copy-seq v)`, of `v`'s kind without a type at expansion (I23); every sequence function checks 0 ≤ start ≤ end ≤ length at safety ≥ 1 | CLHS replace and 17.1.1; I40's measurements; a copy keeps `Int32Array`/`Int32List` without reading the environment |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
@@ -1636,12 +1647,13 @@ backend selection by source root; mutable host collections only.
 - **Sequence functions, v1 limits.** Keyword arguments must be literal keywords
   (a macro decides at expansion which it was given), and so must
   `:allow-other-keys` when other keys are given (I45); a `:key` that is nil
-  only at run time fails as a call of nil. `:start` greater than
-  `:end` is not signalled -- the range is empty -- while CLHS requires an
-  error; an `:end` past the length is signalled by `elt` at safety ≥ 1. A
-  curried form inlined into a predicate is a loop in an `if` test: an IIFE on
-  Squint (D51). Not built yet: everything after the query slice (D44), with
-  the native operations of I40.
+  only at run time fails as a call of nil. A curried form inlined into a
+  predicate is a loop in an `if` test: an IIFE on Squint (D51). A curried
+  `subseq` takes its start only: `(subseq 1 3)` would read as a call. Not
+  built yet: `remove`, `delete`, `substitute`, `nsubstitute` (with `-if`,
+  `-if-not`), `remove-duplicates`, `delete-duplicates`, `map`, `map-into`,
+  `concatenate`, `make-sequence`, `merge`, `search`, `mismatch`,
+  `(setf subseq)` (D44).
 - **Compiler passes** (D51). A sequence function or a `ucl/loop` in
   expression position is an IIFE on Squint (§9.11). A pass over a `ucl/defun`
   body could compute it into a temporary before its statement -- lifting with
