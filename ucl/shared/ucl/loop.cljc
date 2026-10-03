@@ -73,6 +73,8 @@
   [ts i form]
   (let [v (get ts i)]
     (cond
+      ;; nil: a value the clause binds and nothing reads (CLHS 6.1.1.7)
+      (and (nil? v) (< i (count ts))) [(gensym "ignored") (inc i)]
       (and (symbol? v) (nil? (namespace v))) [v (inc i)]
       (or (seq? v) (vector? v))
       (fail! (str "destructuring (" (pr-str v) ") needs conses, which ucl does not have (D53). "
