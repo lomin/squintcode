@@ -33,6 +33,7 @@ bb build-one <name>  # one problem, e.g. bb build-one fizzbuzz
 bb clean             # remove out/ and ClojureScript caches
 
 ucl/run-tests.sh [jvm|cljs|squint|cljd]   # ucl suite, optionally one host
+bb ucl/ansi/translate.clj                 # regenerate test/ucl/ansi_sequences_test.cljc from the ANSI test suite
 ```
 
 REPLs: `clj -M:jvm` (Clojure) or `clj -M:cljs:repl` (ClojureScript). The

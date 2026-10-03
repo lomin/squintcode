@@ -388,6 +388,14 @@ JavaScript is identical but for two `const` aliases); Dart JIT 360 against
 362; Dart AOT 686 against **383** -- the expansion's counters are hinted
 `int` (I20), the hand-written `loop`'s are `dynamic`.
 
+**Checked against the ANSI test suite** (I45, I46; `ucl/ansi/REPORT.md`). Of
+the 1,258 tests the suite has for these 14 functions, 166 use only data ucl
+has -- vectors of numbers and symbols -- and translate; each passes on the
+four hosts and, translated back by `ucl/conformance.clj`, on SBCL and ECL.
+The rest need lists, bit vectors, characters or strings, multiple values
+beyond a few, or are error tests; the report counts each reason. Checking
+the shipped slice against the suite found four deviations, fixed by I45.
+
 ### 4.3 `ucl/loop` and blocks (D53–D62) -- built, but hash-table iteration (§13)
 
 `ucl/loop` is Common Lisp's `LOOP` (CLHS 6.1) for what ucl has: vectors,
@@ -1471,6 +1479,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I43 | Two backend operations, `:seqfn :eql` (Squint `===`, ClojureScript `keyword-identical?`, JVM `Util/equiv`, Dart `==`) and `:seqfn :fail` (the hosts' existing `fail` helpers, an `ex-info` on the JVM) | D52's value equality per host; a run-time error without reaching a host's runtime library on Dart |
 | I44 | An empty `reduce` without `:initial-value` calls its function with no arguments; for an operator that is decided at compile time: `+` is 0, `*` is 1, `-`, `/`, comparisons, `min` and `max` signal at safety ≥ 1 (nil at 0) | H72; ucl's `min`/`max` are macros on some hosts and refuse no arguments when expanded |
 | I45 | Found against the ANSI test suite: `:allow-other-keys` (leftmost wins) admits other keys, whose values are still evaluated; with other keys present its value must be a literal, else a compile-time error; every keyword value is evaluated, a repeated key's too; `'f` and `#'f` (`(var f)`) call the global `f`; a literal nil `:key` is identity | CLHS 3.4.1.4, 3.4.1.4.1, 1.4.1.5, 17.2.1; before, `'identity` was called as a Clojure symbol -- a map lookup, silently wrong |
+| I46 | `ucl/ansi/translate.clj` turns the ANSI test suite (pinned commit) into ucl tests: a Common Lisp reader, a translation of the vector subset (symbols become keywords, `#'f` Clojure's `f`, `values` a vector), a validation of each case on the JVM backend -- a case ucl rejects at expansion becomes a skip with ucl's message, one returning another value is held out and reported -- and output as `*-conformance-test`s, which `ucl/conformance.clj` runs on SBCL and ECL as well. Generated tests are committed; the translator is rerun by hand | the suite is Common Lisp and ucl is not: only a translation can use it; the round trip through SBCL and ECL checks the translation, the four hosts check ucl |
 
 Carried over from `setf` and still in force: resolution of a place is syntactic
 and macro-time, by name; every runtime argument is evaluated exactly once;
