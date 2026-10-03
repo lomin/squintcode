@@ -27,6 +27,9 @@ allocation; no protocol layer.
 (decf! (elt a 1) 10)
 ```
 
+Generated bindings are shown as `t0`, `t1`, `v` throughout for readability; the
+real names are `gensym`s, so they can never capture a caller's local.
+
 The library exists to make that true on *any* host, not just the three here. The
 point is not the three emittable forms; it is that the shared logic is genuinely
 host-agnostic and a new host costs one directory.
@@ -51,10 +54,10 @@ These were binding from the start. Most of the architecture falls out of them.
    unavoidable.
 
 Requirement 6(b) is the load-bearing one for the shape of the code. In practice:
-`setf.contract` is 130 lines and carries the whole model; the JS backends are
-39–58 lines each and are almost entirely the six emitter bodies; the JVM backend
-is 113 lines only because it also carries the constructor-type table and the
-Reflector fallback. That ratio is the answer to "how much of this can be shared".
+`setf.contract` carries the whole model, including arity checking and the curried
+read; the JS backends are almost entirely the six emitter bodies plus one-line
+macro delegates; the JVM backend is larger only because it asks the compiler for
+a `:field` receiver's class and carries the Reflector fallback.
 
 ## 3. Requirements that shaped it, and were settled early
 
@@ -119,8 +122,12 @@ build tool. `grep -i 'clj\|cljs\|squint\|jvm' shared/` returns nothing.
 `srcs` is the single contract change made during implementation, and it is
 host-agnostic: only source forms travel that way.
 
-Each backend also defines the three macros as one-line delegates to the shared
-engine, plus the constructors its clients use (`make-arr`, `make-map`, `make-obj`).
+Each backend also defines the macros as one-line delegates to the shared engine,
+plus the constructors its clients use (`make-arr`, `make-map`, `make-obj`).
+
+A backend may build its emitter map per expansion. The JVM backend does, because
+its `:field` pair reads the compiler's `&env` to learn a local's class. The
+contract never sees `&env`; it still receives six functions.
 
 ### 4.3 Backend selection is a source-root convention
 
@@ -157,10 +164,19 @@ path and on the read path both.
 `elt` / `gethash` / `get!` are *place names*, and each is an **accessor pair**:
 one name, both directions. `(elt coll i)` reads; `(setf! (elt coll i) v)` writes.
 `setf!` consumes the place form in head position and never expands it, so the two
-directions never interfere. A place name is a **macro**, not a function, because a
-read has to be able to attach whatever the host needs to emit its fastest access —
-a JVM read carries a `^java.util.List` hint, and no function can. The cost is that
-a place name cannot be passed by value, so `(map elt xs)` is not a thing.
+directions never interfere. A place name is a **macro**, not a function, so that
+a read can attach whatever the host needs to emit its fastest access — a JVM
+`get!` reads the compiler's knowledge of the receiver's class.
+
+A place name is matched by its name alone, so `(setf! (api/elt a 1) v)` and
+`(setf! (elt a 1) v)` are the same place.
+
+A macro cannot be passed by value, so `(map elt xs)` does not compile. Given every
+argument but the receiver, a place name instead **returns a function**:
+`(map (elt 1) colls)`, `(map (gethash "k") maps)`, `(map (get! x) objs)`. The
+fixed arguments are evaluated once per application. On the JS hosts and for
+`elt`/`gethash` on the JVM this is as fast as the direct form; a curried `get!`
+on the JVM is reflective (§7).
 
 Place names denote *semantics*, not the function they are named after, and are not
 resolved against `clojure.core` — `clojure.core/elt` does not exist. Each host
@@ -200,7 +216,7 @@ Direct operators, no dispatch, no allocation:
 t0[t1];                                         // elt a 1
 (t0_609[t1_610] = v_611);                      // setf! (elt a 1) 99
 (t0_612[t1_613] = ((t0_612[t1_613]) + (1)));    // incf! (elt a 1)
-t0.set(t1);                                     // gethash m "k"
+t0.get(t1);                                     // gethash m "k"
 t0_618.set(t1_619, v_620);                      // setf! (gethash m "k") 7
 (t0_621.x = v_622);                             // setf! (get! o x) 42
 ```
@@ -223,22 +239,32 @@ The read and the write are the same operation with the same hint, from the same
 emitter family — which is what keeps `incf!` from being reachable on strictly fewer
 structures than `setf!` (F13).
 
-O(1) on `ArrayList`, `LinkedList`, `HashMap` and `TreeMap` alike. `nth` would
-have been the wrong choice: it requires `Indexed`, which excludes `LinkedList`,
-and it made the derived forms reachable on strictly fewer structures than
-`setf!` (F13).
+It works on every `java.util.List` and `java.util.Map`, at the structure's own
+cost: O(1) on `ArrayList` and `HashMap`, O(n) on `LinkedList`, O(log n) on
+`TreeMap`. `nth` would have been the wrong choice: it requires `Indexed`, which
+excludes `LinkedList`, and it made the derived forms reachable on strictly fewer
+structures than `setf!` (F13).
 
-`get!` emits a real `PUTFIELD` whenever the backend can resolve the receiver's
-class — which it can for every constructor it defines — and falls back to
-`clojure.lang.Reflector` otherwise:
+`get!` emits a real `GETFIELD`/`PUTFIELD` whenever the receiver's class is known
+at expansion time, and falls back to `clojure.lang.Reflector` otherwise. The
+backend keeps no table of its own; it asks the compiler, in this order:
+
+1. a hint on the receiver form itself — `(get! ^Point p x)`;
+2. the class the compiler has for a local, read from `&env` — a hinted fn
+   parameter, or a `let` whose init expression has a known type;
+3. the return-type hint of the called fn, resolved through the namespace —
+   `(get! (api/make-obj) x)`, because `make-obj` is declared `^java.awt.Point`.
 
 ```clojure
-(setf! (get! (api/make-obj) x) 42)   => (let [t0 (api/make-obj) v 42] (set! (.x ^Point t0) v) v)
-(setf! (get! o x) 42)               => (let [t0 o v 42] (Reflector/setInstanceField t0 "x" v) v)
+(setf! (get! (api/make-obj) x) 42)   => (let [t (api/make-obj) v 42] (set! (.x ^Point t) v) v)
+(fn [^Point p] (setf! (get! p x) 42)) => (let [t p v 42] (set! (.x ^Point t) v) v)
+(setf! (get! o x) 42)                => (let [t o v 42] (Reflector/setInstanceField t "x" v) v)
+(get! o x)                           => (let [t o] (Reflector/getInstanceField t "x"))
 ```
 
-This is the library's only reflective path. It exists because Clojure cannot
-express a fast field store without a static type — see §8.
+Reads and writes fall back the same way. This is the library's only reflective
+path. It exists because Clojure cannot express a fast field access without a
+static type — see §8.
 
 ### Measured: what a JVM field write costs
 
@@ -290,7 +316,7 @@ choice was made on reasoning, with no measurement available either way.
 | **Q9** | **`setf!` is a macro.** Runtime dispatch would have cost the direct emission and the static field splice | evidence |
 | **Q12** | **Backend selection is explicit in each target's build setup.** Mutual exclusion is an accepted, unenforced build invariant | user judgement |
 | **Q13** | `:field` writes specialize at expansion time when the type is statically identifiable, else fall back | evidence |
-| **Q14** | JVM resolves the receiver's class from (a) a use-site hint, (b) the return type of a constructor the backend defines, (c) Reflector | evidence |
+| **Q14** | JVM resolves the receiver's class from (a) a hint on the receiver form, (b) the compiler's class for a local (`&env`), (c) the resolved fn's return-type hint, else (d) Reflector | evidence |
 | **Q15** | **The place vocabulary is closed by design.** The library's value is the contract, not a place abstraction outside it | user judgement |
 | **Q16** | The indexed place is **`elt`**; `nth` leaves the vocabulary entirely | user judgement |
 | **Q17** | **A place name denotes semantics**; each host emits its fastest form with those semantics | user judgement |
@@ -354,8 +380,9 @@ vocabulary expresses. They were the first things that would have broken Q15.
 exactly one place on one host — `:field` on the JVM — because `elt` and `gethash`
 take their type from a backend-supplied interface hint. It would have added a
 second closed vocabulary that every host must grow in lockstep, and bought 5.9 ns
-versus 43 ns only for a foreign class held in a variable. A binding-site hint is
-not an alternative: a macro cannot see it.
+versus 43 ns only for a foreign class held in a variable — and that case is
+covered anyway, because on the JVM a macro *can* see a binding-site hint through
+`&env` (Q14 b).
 
 ## 9. Evidence
 
@@ -488,20 +515,23 @@ would replace.
 ## 11. Verification
 
 `test/setf/api_test.cljc` is byte-identical across hosts. It covers every place,
-every API form, return values, single-evaluation of arguments, slot splicing,
-arity rejection, unknown places, and slot validation.
+every API form, return values, single-evaluation of arguments, hygiene of the
+generated bindings, `make-arr`'s initial contents, namespace-qualified place
+names, curried readers, slot splicing, arity rejection, unknown places, slot
+validation, and (JVM) how a `:field` receiver's class is resolved.
 
 ```bash
 ./run-tests.sh          # all three hosts, plus the example app on each
 ```
 
-Current state:
+The script exits non-zero if any assertion fails on any host, or if the example
+app does not print identically on all three. Current state:
 
 ```
-CLOJURE / JVM      Ran 10 tests, 23 assertions.  0 failures, 0 errors.
-CLOJURESCRIPT      Ran 6 tests, 15 assertions.   0 failures, 0 errors.
+CLOJURE / JVM      Ran 18 tests, 67 assertions.  0 failures, 0 errors.
+CLOJURESCRIPT      Ran 12 tests, 47 assertions.  0 failures, 0 errors.
 SQUINT             all assertions pass
-EXAMPLE APP        RESULT {:a 90, :a0 2, :m 7, :o 42}  x3 hosts, identical
+EXAMPLE APP        RESULT and HOF output identical on all three hosts
 ```
 
 Two honest caveats about the suite:
@@ -551,7 +581,8 @@ Toolchain facts that cost real time and are easy to re-trip:
   `()`, which is truthy in Clojure; the loop needs `(seq ks)`.
 - A macro that returns a *plan map* instead of the code compiles to garbage.
 - `(str "t" n)` produces a String, and `list` emits it as a string literal — use
-  `(symbol …)` for generated names.
+  `(symbol …)` for generated names. And make them `gensym`s: a fixed name like
+  `t0` captures a caller's local of the same name.
 - A `let` binding vector of vectors destructures; it does not bind two pairs.
   Interleave into a flat vector.
 - **Squint's `is` is node's `assert.equal`, i.e. `==`.** `==` on two distinct JS
@@ -585,9 +616,10 @@ Versions used for every measurement: Node 24.16.0, openjdk 21.0.11, Clojure
   the split has been reasoned about and laid out, not performed.
 - `incf!`/`decf!` are the only derived forms, and no evidence exists yet for any
   other one.
-- **A place name cannot be passed by value.** `elt` is a macro (Q21), so
-  `(map elt colls)` does not compile on any host. A higher-order read would need a
-  runtime function, which costs the JVM type hint; that trade was taken knowingly.
+- **A place name cannot be passed by value** — `(map elt colls)` does not compile
+  — but the curried form `(elt 1)` returns a function. On the JVM a curried `get!`
+  is reflective, measured 15–23× a direct field read by `bench/hof_bench.clj`.
+  Write `(fn [^Point p] (get! p x))` where that matters.
 
 ## 15. Appendix — corrections made during the session
 
@@ -603,6 +635,13 @@ trustworthy. Each of these was a claim made without compiling it first.
 | `incf!` returned the value it stored | It returned the *delta*. Found by the test suite, not by inspection. Fixed in the engine so all forms return what they stored. |
 | A slot argument is a compile-time name | Never checked. A list slot reached a backend and produced a `ClassCastException`. Now rejected by name in the shared namespace. |
 | "The vocabulary is complete because all three places can be written" | The read side was missing. A *generalized* assignment library whose place names cannot be read is half a library, and the gap pushed portable clients back to naming `nth` / `.get` / `.-x` by hand. Closed in Q21, reusing the `:read` emitter every backend already had for `incf!`. |
+
+| Generated bindings were hygienic | They were fixed names `t0`, `t1`, `v`. `(let [t0 7] (setf! (elt a 0) t0))` stored the array into itself. Now `gensym`s. |
+| "JS `make-arr` builds an array with holes" | `(array n)` builds the one-element array `[n]`. The tests worked around a bug they had misdiagnosed. Now length `n`, filled with 0 on every host. |
+| JVM constructor table recognised `make-obj` | It matched any fn *named* `make-obj` in any namespace, and hinted a map as `Point`. Replaced by asking the compiler (Q14). |
+| "A macro cannot see a binding-site hint" | On the JVM it can, through `&env`. The write path was emitting Reflector for a hinted fn parameter. |
+| "Green on all three hosts" | JVM and ClojureScript failures exited 0, and "ALL HOSTS AGREE" was printed unconditionally. Both are now real gates. |
+| "Curried `get!` measured ~110×" | The benchmark did not compile. Fixed and run: 15–23×. |
 
 The pattern is consistent: every serious error in this design was an inference
 made where a compile would have answered the question.

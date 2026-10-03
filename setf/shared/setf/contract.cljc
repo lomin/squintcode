@@ -48,6 +48,9 @@
   "Bind every RUNTIME argument exactly once, left to right, so a place with a
    compound expression in it never evaluates it twice.
 
+   Every generated name is a fresh gensym, so a caller's local can never be
+   captured: `(let [t0 7] (setf! (elt a 0) t0))` stores 7, not the array.
+
    Returns [binds refs srcs]. `refs` are the generated binding symbols; `srcs`
    are the ORIGINAL argument forms, in order. Handing those to a backend is what
    lets it recognise one of its own constructors, or read a type hint, without
@@ -64,7 +67,7 @@
                             ". A slot is consumed at expansion time and is never evaluated.")
                        {:slot a}))
               (recur (rest ks) (rest as) binds (conj refs a) (conj srcs a)))
-          (let [nm (symbol (str "t" (count refs)))]
+          (let [nm (gensym "t")]
             (recur (rest ks) (rest as)
                    (conj binds [nm a]) (conj refs nm) (conj srcs a)))))
       [binds refs srcs])))
@@ -78,18 +81,32 @@
                   ". A host must implement the whole contract or it is not compatible.")
              {:kind kind :op op-key :missing (mapv name kinds)})))
 
-(defn- place-spec
-  [place-form]
+(defn- accessor-name
+  "A place is resolved by NAME, so `elt`, `api/elt` and `setf.api/elt` are the
+   same place. Resolution stays syntactic (Q3); a namespace is not consulted."
+  [accessor]
+  (when (symbol? accessor) (symbol (name accessor))))
+
+(defn- curried?
+  "A read given every argument but the receiver."
+  [spec place-form]
+  (= (count (rest place-form)) (dec (count (:argkinds spec)))))
+
+(defn- place-spec*
+  [place-form allow-curried?]
   (let [accessor (first place-form)
-        spec     (get places accessor)]
+        spec     (get places (accessor-name accessor))]
     (when-not spec
       (fail! (str "unknown place `" accessor "`. Known places: " (pr-str (known-places)))
              {:place place-form :known (known-places)}))
-    (when (not= (count (rest place-form)) (count (:argkinds spec)))
+    (when-not (or (= (count (rest place-form)) (count (:argkinds spec)))
+                  (and allow-curried? (curried? spec place-form)))
       (fail! (str "`" accessor "` expects " (count (:argkinds spec))
                   " arguments, got " (count (rest place-form)))
              {:place place-form :expected (:argkinds spec)}))
     spec))
+
+(defn- place-spec [place-form] (place-spec* place-form false))
 
 (defn- expand-with
   "Expand `(op <place> <value-form>)`.
@@ -104,11 +121,12 @@
         kind     (:kind spec)
         op       (lookup-op backend kind op-key)
         [binds refs srcs] (plan-binds (:argkinds spec) (rest place-form))
-        store    (op refs srcs 'v)
-        all      (vec (concat (apply concat binds) ['v (value-fn refs srcs value-form)]))]
+        v        (gensym "v")
+        store    (op refs srcs v)
+        all      (vec (concat (apply concat binds) [v (value-fn refs srcs value-form)]))]
     {:kind kind :refs (vec refs) :srcs (vec srcs)
      :store store
-     :code  (list 'let all store 'v)}))
+     :code  (list 'let all store v)}))
 
 (defn expand-setf!
   "Shared logic for `(setf! <place> <value>)`. Returns the expansion."
@@ -139,16 +157,23 @@
    same `plan-binds` the write path uses, so a compound index expression is
    evaluated exactly once here too.
 
-   A place name is a macro on every host, not a function: a read has to be able to
-   attach whatever the host needs in order to emit its fastest access, and only a
-   macro can. The cost is that a place name cannot be passed by value -- `(map elt
-   xs)` is not a thing -- which is the same trade `setf!` already makes."
+   A place name is a macro on every host, so it cannot be passed by value on its
+   own. The curried form is the way into a higher-order position: given every
+   argument EXCEPT the receiver, `(elt i)` expands to `(fn [coll] (elt coll i))`.
+   The remaining arguments land in the fn body, so they are evaluated once per
+   application, never hoisted."
   [backend place-form]
-  (let [spec     (place-spec place-form)
-        kind     (:kind spec)
-        rd       (lookup-op backend kind :read)
-        [binds refs srcs] (plan-binds (:argkinds spec) (rest place-form))
-        form     (rd refs srcs)]
-    {:kind kind :refs (vec refs) :srcs (vec srcs)
-     :read form
-     :code (list 'let (vec (apply concat binds)) form)}))
+  (let [spec (place-spec* place-form true)]
+    (if (curried? spec place-form)
+      (let [r (gensym "recv")]
+        {:kind (:kind spec)
+         :code (list 'fn [r]
+                     (:code (expand-read backend (list* (first place-form) r
+                                                        (rest place-form)))))})
+      (let [kind     (:kind spec)
+            rd       (lookup-op backend kind :read)
+            [binds refs srcs] (plan-binds (:argkinds spec) (rest place-form))
+            form     (rd refs srcs)]
+        {:kind kind :refs (vec refs) :srcs (vec srcs)
+         :read form
+         :code (list 'let (vec (apply concat binds)) form)}))))

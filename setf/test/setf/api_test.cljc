@@ -69,6 +69,83 @@
       (is (= 30 (get! o x)))
       (is (nil? (gethash m "absent")) "reading a missing key yields nil, not a throw"))))
 
+(deftest place-as-value-test
+  (testing "a place name becomes a function, so it can be mapped"
+    ;; A place name is a macro and cannot be passed to `map` by itself. The
+    ;; 1-arity fixes the trailing argument and returns an ordinary function,
+    ;; which is what makes a place usable in a higher-order position.
+    (let [xs [(api/make-obj) (api/make-obj)]]
+      (setf! (get! (nth xs 0) x) 10)
+      (setf! (get! (nth xs 1) x) 20)
+      (is (= 10 ((get! x) (nth xs 0))))
+      (is (= 20 ((get! x) (nth xs 1))))
+      (is (fn? (get! x)) "the curried form is a function value")))
+
+  (testing "elt and gethash curry too, and fix a plain value"
+    (let [as [(api/make-arr 3) (api/make-arr 3)]
+          ms [(api/make-map) (api/make-map)]]
+      (setf! (elt (first as) 1) 7)
+      (setf! (elt (second as) 1) 8)
+      (setf! (gethash (first ms) "k") :v)
+      (is (= 7 ((elt 1) (first as))))
+      (is (= 8 ((elt 1) (second as))) "each reader sees its own receiver")
+      (is (= :v ((gethash "k") (first ms))))
+      (is (nil? ((gethash "k") (second ms))) "nothing was stored under that key")
+      (is (fn? (elt 1)))
+      (is (fn? (gethash "k")))))
+
+  (testing "a fixed argument runs once per application, not twice"
+    ;; The unquoted argument lands in the closure BODY, so it is evaluated on
+    ;; each application -- exactly once, under the same rule the direct form
+    ;; obeys. It is NOT hoisted out to run once when the reader is built; that
+    ;; would be wrong for an index that is meant to vary per collection.
+    (let [a    (api/make-arr 2)
+          runs (atom 0)
+          bump (fn [] (swap! runs inc) 1)]
+      (setf! (elt a 1) 5)
+      (let [reader (elt (bump))]
+        (is (= 0 @runs) "building the reader runs nothing yet")
+        (is (= 5 (reader a)))
+        (is (= 1 @runs) "one application, one evaluation")
+        (is (= 5 (reader a)))
+        (is (= 2 @runs) "and again on the next application")))))
+
+(deftest make-arr-test
+  (testing "a new array has length n and every slot reads 0, on every host"
+    (let [a (api/make-arr 3)]
+      (is (= 0 (elt a 0)))
+      (is (= 0 (elt a 1)))
+      (is (= 0 (elt a 2)))
+      (incf! (elt a 2))
+      (is (= 1 (elt a 2)) "an untouched slot is a number, so incf! works on it"))))
+
+(deftest hygiene-test
+  (testing "a caller's local is never captured by a generated binding"
+    ;; The names below are exactly the ones an unhygienic expansion would bind.
+    (let [a  (api/make-arr 3)
+          t0 2
+          t1 7
+          v  9]
+      (setf! (elt a t0) t1)
+      (is (= 7 (elt a 2)) "index and value are the caller's t0 and t1")
+      (setf! (elt a 0) v)
+      (is (= 9 (elt a 0)) "the value is the caller's v")
+      (incf! (elt a 0) t0)
+      (is (= 11 (elt a 0)) "the delta is the caller's t0")
+      (is (= 7 (elt a t0)) "a read sees the caller's t0")
+      (is (= 7 ((elt t0) a)) "so does a curried read"))))
+
+(deftest qualified-place-test
+  (testing "a place may be named through the namespace alias"
+    (let [a (api/make-arr 2)
+          m (api/make-map)]
+      (setf! (api/elt a 1) 4)
+      (is (= 4 (api/elt a 1)))
+      (incf! (api/elt a 1))
+      (is (= 5 (elt a 1)))
+      (setf! (api/gethash m "k") 1)
+      (is (= 1 (gethash m "k"))))))
+
 (deftest returns-value-test
   (testing "the forms evaluate to the assigned / resulting value"
     (let [a (api/make-arr 2)]
@@ -135,8 +212,44 @@
 
      (deftest read-expansion-test
        (testing "a read binds its runtime args and emits only the access"
-         (let [form (macroexpand-1 '(setf.api/elt a 1))]
+         (let [form  (macroexpand-1 '(setf.api/elt a 1))
+               pairs (map vec (partition 2 (second form)))
+               [[t0 _] [t1 _]] pairs]
            (is (and (seq? form) (= 'let (first form))) "must be a let")
-           (is (= '[[t0 a] [t1 1]] (map vec (partition 2 (second form))))
-               "coll and index, each bound exactly once")
-           (is (= '(.get t0 t1) (nth form 2)) "the body is the access, nothing else"))))))
+           (is (= '[a 1] (map second pairs)) "coll and index, each bound exactly once")
+           (is (not-any? '#{t0 t1 v} (map first pairs)) "generated names are fresh")
+           (is (= (list '.get t0 t1) (nth form 2)) "the body is the access, nothing else"))))
+
+     ;; A user fn that merely shares a name with a backend constructor.
+     (defn make-obj [] (java.util.HashMap.))
+
+     (defmacro expand-here
+       "Expand `form` with the macro's real &env, as the compiler would."
+       [form]
+       (list 'quote (apply @(resolve (first form)) form &env (rest form))))
+
+     (defn- reflective? [form]
+       (boolean (some #{'clojure.lang.Reflector/setInstanceField
+                        'clojure.lang.Reflector/getInstanceField}
+                      (flatten form))))
+
+     (deftest field-class-resolution-test
+       (testing "a field access is direct whenever the compiler knows the class"
+         (is (not (reflective? (macroexpand-1 '(setf.api/setf! (get! (setf.api/make-obj) x) 1))))
+             "a backend constructor carries a return hint")
+         (is (not (reflective? (macroexpand-1 '(setf.api/setf! (get! ^java.awt.Point p x) 1))))
+             "a hint on the receiver form")
+         (is (not (reflective? (let [p (java.awt.Point.)]
+                                 (expand-here (setf.api/setf! (get! p x) 1)))))
+             "a local whose type the compiler inferred")
+         (is (not (reflective? ((fn [^java.awt.Point p] (expand-here (setf.api/get! p x)))
+                                nil)))
+             "a hinted fn parameter, on the read path too"))
+       (testing "and falls back to Reflector, on both paths, when it cannot"
+         (is (reflective? (macroexpand-1 '(setf.api/setf! (get! o x) 1))))
+         (is (reflective? (macroexpand-1 '(setf.api/get! o x)))))
+       (testing "a same-named fn from another namespace is not mistaken for a constructor"
+         ;; Resolve as this file's code would: `make-obj` here is the local fn.
+         (binding [*ns* (the-ns 'setf.api-test)]
+           (is (= #'setf.api-test/make-obj (resolve 'make-obj)))
+           (is (reflective? (macroexpand-1 '(setf.api/get! (make-obj) x)))))))))

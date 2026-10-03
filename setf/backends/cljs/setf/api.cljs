@@ -2,10 +2,11 @@
   "ClojureScript host backend for `setf` -- runtime half.")
 
 (defn make-arr
-  "A mutable indexed sequence. Any object with an integer-keyed `[]` works:
-   `Array`, `Uint32Array`, and anything else the host indexes that way."
+  "A mutable indexed sequence of length `n`, every slot 0 -- as on every host.
+   `elt` itself works on any object with an integer-keyed `[]`: `Array`,
+   `Uint32Array`, and anything else the host indexes that way."
   [n]
-  (array n))
+  (.fill (js/Array. n) 0))
 
 (defn make-map
   "A mutable keyed collection."

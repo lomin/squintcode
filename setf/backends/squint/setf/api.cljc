@@ -28,22 +28,30 @@
 ;; the same form whether it is being written (`setf!` consumes it in head
 ;; position) or read (expanded here), and `setf!` consumes it without expanding
 ;; it, so the two directions never interfere.
+;;
+;; Given every argument but the receiver, a place name returns a FUNCTION, so a
+;; place can be handed to a higher-order function: `(map (elt 1) colls)`. On this
+;; host every curried reader is the same direct access as the uncurried one.
 ;; ---------------------------------------------------------------------------
 
 (defmacro elt
-  "Read the element at index `i` of `coll`. Any object the host indexes with `[]`."
-  [coll i]
-  (:code (contract/expand-read emit (list 'elt coll i))))
+  "Read the element at index `i` of `coll`: `(elt coll i)`. Any object the host
+   indexes with `[]`. `(elt i)` returns `(fn [coll] ...)`, so `(map (elt 1) colls)`
+   works."
+  [& args]
+  (:code (contract/expand-read emit (cons 'elt args))))
 
 (defmacro gethash
-  "Read the value at key `k` of `m`."
-  [m k]
-  (:code (contract/expand-read emit (list 'gethash m k))))
+  "Read the value at key `k` of `m`: `(gethash m k)`.
+   `(gethash k)` returns `(fn [m] ...)`, so `(map (gethash \"k\") maps)` works."
+  [& args]
+  (:code (contract/expand-read emit (cons 'gethash args))))
 
 (defmacro get!
-  "Read the field `f` of object `o`."
-  [o f]
-  (:code (contract/expand-read emit (list 'get! o f))))
+  "Read the field `f` of object `o`: `(get! o f)`. `f` must be a bare symbol.
+   `(get! f)` returns `(fn [o] ...)`, so `(map (get! x) objs)` works."
+  [& args]
+  (:code (contract/expand-read emit (cons 'get! args))))
 
 (defmacro setf!
   "Assign to a place. Returns `v`."
@@ -65,9 +73,9 @@
 ;; ---------------------------------------------------------------------------
 
 (defn make-arr
-  "A mutable indexed sequence."
+  "A mutable indexed sequence of length `n`, every slot 0 -- as on every host."
   [n]
-  (array n))
+  (.fill (js/Array. n) 0))
 
 (defn make-map
   "A mutable keyed collection."
