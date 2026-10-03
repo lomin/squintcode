@@ -7,8 +7,8 @@ Solve LeetCode problems using ClojureScript-like syntax that compiles to optimiz
 - ✅ **Squint** - Compiles to LeetCode-compatible JavaScript
 - ✅ **Clojure (JVM)** - Tests with native Java collections
 - ✅ **ClojureScript** - Interactive REPL development
-- ✅ **Common Lisp-style macros** - Array manipulation (`make-array`, `aref`, `setf`)
-- ✅ **Mutable data structures** - HashMap/Map operations optimized for performance
+- ✅ **[`ucl`](ucl/README.md)** - a Common Lisp-shaped contract (`make-array`, `elt`, `setf`, `gethash`, `defstruct`, ...) that compiles to hand-written-quality code on every host
+- ✅ **One source, no reader conditionals** - solutions and tests are identical on all three hosts
 - ✅ **Babashka build system** - Fast, unified task orchestration
 
 ## Prerequisites
@@ -40,12 +40,14 @@ bb build-one fizzbuzz
 
 ```bash
 bb test              # Run all tests on all platforms
+bb test-ucl          # ucl library suite on all hosts
 bb test-squint       # Squint tests only (LeetCode-identical environment)
 bb test-clj          # Clojure JVM tests only
 bb test-cljs         # ClojureScript tests only
 ```
 
-**Test order**: Squint → Clojure → ClojureScript (fails fast)
+**Test order**: ucl suite, then Squint → Clojure → ClojureScript (fails fast).
+A ClojureScript compiler warning fails the run.
 
 ### Building
 
@@ -60,8 +62,8 @@ bb clean             # Clean all build artifacts
 ### Test-Driven Development (Recommended)
 
 ```bash
-# Terminal 1: Watch and run ClojureScript tests (if configured)
-clj -M:test-watch
+# Terminal 1: Watch and run ClojureScript tests
+clj -M:cljs:test-watch
 
 # Terminal 2: Edit code in your favorite editor
 # Tests re-run automatically on save
@@ -81,8 +83,8 @@ bb test-squint      # LeetCode-identical environment
 ### REPL-Driven Development
 
 ```bash
-# Start ClojureScript REPL
-clj -M:repl
+# Start ClojureScript REPL (or clj -M:jvm for a Clojure REPL)
+clj -M:cljs:repl
 ```
 
 Then in the REPL:
@@ -92,142 +94,75 @@ Then in the REPL:
 (require '[squintcode.fizzbuzz :refer [fizzBuzz]])
 
 ;; Test it interactively
-(fizzBuzz 15)
+(vec (fizzBuzz 15))
 ;; => ["1" "2" "Fizz" "4" "Buzz" ... "FizzBuzz"]
-
-;; Load and run tests
-(require '[cljs.test :refer [run-tests]]
-         '[squintcode.fizzbuzz-test])
-(run-tests 'squintcode.fizzbuzz-test)
 ```
 
 ### IDE Integration (Calva for VSCode)
 
 1. Open project in VSCode with [Calva](https://calva.io/) installed
 2. Press `Ctrl+Alt+C Ctrl+Alt+J` (Mac: `Cmd+Option+C Cmd+Option+J`)
-3. Select "deps.edn" → `:repl` alias
+3. Select "deps.edn" → the `:cljs` and `:repl` aliases
 4. Evaluate code with `Ctrl+Alt+C E` or run tests with `Ctrl+Alt+C T`
 
 ## Project Structure
 
 ```
 .
-├── bb.edn                    # Babashka tasks (build system)
-├── deps.edn                  # ClojureScript config
+├── bb.edn, bb/tasks/lc.clj   # Babashka tasks (build system)
+├── deps.edn                  # Clojure/ClojureScript config; aliases :jvm / :cljs
 ├── squint.edn                # Squint compiler config
-├── package.json              # npm scripts
-├── src/squintcode/
-│   ├── macros.cljc                           # All macros (Common Lisp-style)
-│   ├── fizzbuzz.cljc                         # Example: FizzBuzz
-│   ├── maxprofit.cljc                        # Example: Max Profit
-│   ├── lc_560_subarray_sum_equals_k.cljc     # LeetCode 560
-│   ├── lc_930_binary_subarrays_with_sum.cljc # LeetCode 930
-│   └── *.cljc                                # Your solutions here
-├── test/squintcode/
-│   ├── *_test.cljc                           # Multi-platform tests
-│   ├── lc_560_subarray_sum_equals_k_test.cljc
-│   └── lc_930_binary_subarrays_with_sum_test.cljc
-└── out/
-    ├── squintcode/*.mjs      # Intermediate ES modules
-    └── *.js                  # LeetCode-ready JavaScript files
+├── src/squintcode/*.cljc     # Solutions
+├── test/squintcode/*_test.cljc  # Their tests -- one file for every host
+├── ucl/                      # The ucl library (README.md is its design)
+└── out/*.js                  # LeetCode-ready JavaScript
 ```
 
 ## Adding a New Problem
 
-1. **Create solution file**: `src/squintcode/twosum.cljc`
+1. **Solution**: `src/squintcode/twosum.cljc`
 
 ```clojure
 (ns squintcode.twosum
-  #?(:clj (:require [squintcode.macros :as cl]))
-  #?(:squint (:require-macros [squintcode.macros :as cl]))
-  #?(:cljs (:require-macros [squintcode.macros :as cl])))
+  (:require [ucl.api :as ucl]))
 
-(defn twoSum [nums target]
-  ;; Your solution here using cl/aref, cl/make-array, etc.
-  )
+(ucl/defun twoSum (nums target)
+  (declare (type simple-vector nums))
+  (let [n    (ucl/length nums)
+        seen (ucl/make-hash-table)]
+    (loop [i 0]
+      (when (< i n)
+        (let [x (ucl/elt nums i)
+              j (ucl/gethash (- target x) seen)]
+          (if (some? j)
+            (ucl/make-array 2 :initial-contents [j i])
+            (do (ucl/setf (ucl/gethash x seen) i)
+                (recur (inc i)))))))))
 ```
 
-2. **Create test file**: `test/squintcode/twosum_test.cljc`
+2. **Test**: `test/squintcode/twosum_test.cljc`
 
 ```clojure
 (ns squintcode.twosum-test
-  (:require #?@(:squint []
-                :clj [[clojure.test :refer [deftest is testing run-tests]]]
-                :cljs [[cljs.test :refer-macros [deftest is testing] :refer [run-tests]]])
-            #?(:squint ["assert" :as assert])
-            [squintcode.twosum :refer [twoSum]])
-  #?(:squint (:require-macros [squintcode.macros :refer [deftest is testing run-tests]])))
+  (:require [ucl.test :refer [deftest is testing]]
+            [ucl.api :as ucl]
+            [squintcode.twosum :refer [twoSum]]))
+
+(defn arr [v] (ucl/make-array (count v) :initial-contents v))
 
 (deftest twosum-test
   (testing "Basic case"
-    (is (= [0 1] (twoSum [2 7 11 15] 9)))))
-
-;; Run tests (required for Squint)
-#?(:squint (run-tests))
+    (let [r (twoSum (arr [2 7 11 15]) 9)]
+      (is (= 0 (ucl/elt r 0)))
+      (is (= 1 (ucl/elt r 1))))))
 ```
 
-3. **Run tests**:
+3. **Run tests**: `bb test`
+4. **Build**: `bb build-one twosum` → `out/twosum.js`
+5. **Submit**: copy `out/twosum.js` to LeetCode
 
-```bash
-bb test
-```
-
-4. **Build for LeetCode**:
-
-```bash
-bb build-one twosum
-# Output: out/twosum.js
-```
-
-5. **Submit**: Copy contents of `out/twosum.js` to LeetCode
-
-## Common Lisp-Style Macros
-
-This project provides familiar Common Lisp operations:
-
-### Arrays
-
-```clojure
-;; Create array
-(cl/make-array 5)                                  ; empty array of size 5
-(cl/make-array 5 :initial-contents [1 2 3 4 5])   ; with initial values
-
-;; Read element
-(cl/aref arr 2)  ; get element at index 2
-
-;; Modify element
-(cl/setf (cl/aref arr 2) 99)  ; set element at index 2 to 99
-
-;; Iterate over array (using macros from squintcode.macros)
-(cl/aloop arr elem [sum 0]
-  (if elem
-    (recur (+ sum elem))
-    sum))
-```
-
-### Hash Tables
-
-```clojure
-;; Create hash table
-(cl/dict :a 1 :b 2 :c 3)
-
-;; Get value
-(cl/gethash ht :a)         ; returns value or nil
-(cl/gethash ht :x 0)       ; returns value or default (0)
-
-;; Set value
-(cl/setf (cl/gethash ht :d) 4)
-```
-
-### Other Operations
-
-```clojure
-;; Append to array (mutates in place)
-(cl/push-end arr 42)
-
-;; Array comprehension
-(cl/forv [i (range 0 10)] (* i 2))  ; => [0 2 4 6 8 10 12 14 16 18]
-```
+The vocabulary, types and rules are in [ucl/README.md](ucl/README.md) §4–§8
+and in [CLAUDE.md](CLAUDE.md).
 
 ## Multi-Platform Testing
 
@@ -237,7 +172,7 @@ All tests run on three platforms to ensure correctness:
 2. **Clojure** - Tests logic with JVM and Java collections
 3. **ClojureScript** - Tests with Google Closure Compiler optimizations
 
-Each platform uses different underlying data structures but the same test code works everywhere thanks to reader conditionals.
+Each platform uses different underlying data structures, but the same source and test code run everywhere: `ucl` chooses the host representation, and `ucl.test` is one test vocabulary on every host.
 
 ## Why Babashka?
 
@@ -252,7 +187,7 @@ Each platform uses different underlying data structures but the same test code w
 - **Test before building**: `bb test` catches errors early across all platforms
 - **Use Squint tests**: They run in the same environment as LeetCode (Node.js)
 - **Check file sizes**: Large builds may timeout on LeetCode
-- **Watch mode**: Use `clj -M:test-watch` if configured for rapid development feedback
+- **Watch mode**: Use `clj -M:cljs:test-watch` for rapid feedback
 
 ## Troubleshooting
 
@@ -266,8 +201,8 @@ Each platform uses different underlying data structures but the same test code w
 - Run `npm install` to install dependencies
 
 **Tests fail on one platform only**
-- Check reader conditionals (`:squint` must come before `:cljs`)
-- Verify platform-specific code is correct
+- On the JVM, `ucl WARNING: ... of unknown type` means a missing `(declare (type ...))`
+- See ucl/README.md §10 (host facts) for known host differences
 
 ## Learn More
 
