@@ -437,6 +437,7 @@
                   (if (next body) (list* 'do (map tr body)) (tr (first body))))
         signals-error (skip "an error test")
         loop (tr-loop f)
+        loop-finish (list 'ucl/loop-finish)
         block (list* 'ucl/block (second f) (map tr (nnext f)))
         return (list* 'ucl/return (map tr (rest f)))
         return-from (list* 'ucl/return-from (second f) (map tr (nnext f)))

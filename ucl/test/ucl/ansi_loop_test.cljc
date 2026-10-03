@@ -78,6 +78,7 @@
   (testing "loop.11.3" (is (= 0 (ucl/let ((z 0)) (ucl/loop repeat 0 do (ucl/incf z)) z))))
   (testing "loop.11.4" (is (= 0 (ucl/let ((z 0)) (ucl/loop repeat -1 do (ucl/incf z)) z))))
   (testing "loop.11.6" (is (= 0 (ucl/let ((z 0)) (ucl/loop repeat -1000000000000 do (ucl/incf z)) z))))
+  (testing "loop.11.7" (is (= 1 (ucl/let ((z 0)) (ucl/loop repeat 10 do (ucl/incf z) (ucl/loop-finish)) z))))
   (testing "loop.11.18" (is (= 6 (ucl/loop for i from 1 to 10 while (< i 6) finally (ucl/return i)))))
   (testing "loop.11.28" (is (= 6 (ucl/loop for i from 1 to 10 until (>= i 6) finally (ucl/return i))))))
 
@@ -93,7 +94,9 @@
   (testing "loop.13.10" (is (= :good (ucl/block nil (ucl/return (ucl/loop named foo return :good)) :bad))))
   (testing "loop.13.11" (is (= :good (ucl/block nil (ucl/loop named foo do (ucl/return :good)) :bad))))
   (testing "loop.13.46" (is (= :good (ucl/loop named foo initially (ucl/return-from foo :good) return :bad))))
-  (testing "loop.13.86" (is (= :good (ucl/block nil (ucl/loop named foo initially (ucl/return :good) return :bad) :bad)))))
+  (testing "loop.13.47" (is (= :good (ucl/loop named foo do (ucl/loop-finish) finally (ucl/return-from foo :good)))))
+  (testing "loop.13.86" (is (= :good (ucl/block nil (ucl/loop named foo initially (ucl/return :good) return :bad) :bad))))
+  (testing "loop.13.87" (is (= :good (ucl/block nil (ucl/loop named foo do (ucl/loop-finish) finally (ucl/return :good)) :bad)))))
 
 (deftest ansi-loop15-1-conformance-test
   (testing "loop.15.32" (is (= [1 2] (ucl/loop :with x = 1 :and y = 2 :return (vector x y)))))
