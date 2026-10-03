@@ -243,6 +243,7 @@
                                (list 'if (list '> a b) a b)
                                (let [x (gensym "a") y (gensym "b")]
                                  (list 'let [x a y b] (list 'if (list '> x y) x y)))))}
+     :string {:princ (fn [x] (list '.toString x))}
      :types {:hint (fn [t _] (type-hint env t))
              :local-hint (fn [t] (when (contains? #{:fixnum :sb53} t) 'int))}
      :struct {:define (fn [model] (define-struct env model))}

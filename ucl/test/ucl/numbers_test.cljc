@@ -28,3 +28,9 @@
   (is (< 1e308 ucl/double-float-positive-infinity))
   (is (> -1e308 ucl/double-float-negative-infinity))
   (is (= 3 (ucl/min ucl/double-float-positive-infinity 3))))
+
+(deftest princ-to-string-test
+  (testing "an integer's decimal digits, a string itself"
+    (is (= "15" (ucl/princ-to-string 15)))
+    (is (= "-7" (ucl/princ-to-string (- 3 10))))
+    (is (= "Fizz" (ucl/princ-to-string "Fizz")))))

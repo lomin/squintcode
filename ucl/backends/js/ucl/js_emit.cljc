@@ -144,6 +144,7 @@
               :max (fn [a b] (if (and (contract/trivial? a) (contract/trivial? b))
                                (list 'if (list '> a b) a b)
                                (list 'js/Math.max a b)))}
+     :string {:princ (fn [x] (list 'js/String x))}
      :types {:hint (fn [t _]
                      (when (:tags? flavor)
                        (cond (#{:fixnum :sb53} t) 'number

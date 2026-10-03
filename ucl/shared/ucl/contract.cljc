@@ -350,6 +350,17 @@
     (reduce (fn [acc x] (two acc x)) args)))
 
 ;; ===========================================================================
+;; Strings
+;; ===========================================================================
+
+(defn ^:macro-support expand-princ-to-string
+  "(princ-to-string x): an integer's decimal digits, a string itself. Each
+   host has a direct form for it; Squint's and ClojureDart's `str` is a
+   runtime call, and ClojureDart's runtime cannot reach a submission."
+  [backend x]
+  ((op backend :string :princ) x))
+
+;; ===========================================================================
 ;; Lambda lists and declarations (D13, D15, D18)
 ;; ===========================================================================
 
@@ -989,7 +1000,8 @@
   '[elt length vector-push-extend make-array
     gethash make-hash-table slot-value
     setf incf decf let let* dotimes
-    defun defstruct defmethod with-slots])
+    defun defstruct defmethod with-slots
+    princ-to-string])
 
 (defmacro defapi
   "Generate every contract macro in the calling namespace.
@@ -1070,6 +1082,10 @@
         "(dotimes (var count [result]) (declare ...) body...)"
         [~'spec & ~'body]
         (~'contract/expand-dotimes ~emit-form ~'spec ~'body))
+      (defmacro ~'princ-to-string
+        "(princ-to-string object) -- an integer's decimal digits, or a string itself."
+        [~'object]
+        (~'contract/expand-princ-to-string ~emit-form ~'object))
       (defmacro ~'with-slots
         "(with-slots (slot...) object body...)"
         [~'slots ~'object & ~'body]

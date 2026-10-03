@@ -351,6 +351,7 @@
               :check-type (fn [t x] (list (if (= t :fixnum) `check-fixnum `check-sb53) x))
               :min (fn [a b] (clojure.core/let [x (gensym "a") y (gensym "b")] `(clojure.core/let [~x ~a ~y ~b] (if (< ~x ~y) ~x ~y))))
               :max (fn [a b] (clojure.core/let [x (gensym "a") y (gensym "b")] `(clojure.core/let [~x ~a ~y ~b] (if (> ~x ~y) ~x ~y))))}
+     :string {:princ (fn [x] (vary-meta (list 'str x) assoc :tag `String))}
      ;; a local bound to a literal: Clojure already infers a primitive long,
      ;; and refuses a hint there ("Can't type hint a local with a primitive initializer")
      :types {:hint (fn [t n] (type-tag t n))
