@@ -28,7 +28,9 @@
    "sequences/position.lsp" "sequences/position-if.lsp" "sequences/position-if-not.lsp"
    "sequences/reduce.lsp"
    "data-and-control-flow/every.lsp" "data-and-control-flow/some.lsp"
-   "data-and-control-flow/notany.lsp" "data-and-control-flow/notevery.lsp"])
+   "data-and-control-flow/notany.lsp" "data-and-control-flow/notevery.lsp"
+   "sequences/fill.lsp" "sequences/replace.lsp" "sequences/copy-seq.lsp" "sequences/subseq.lsp"
+   "sequences/reverse.lsp" "sequences/nreverse.lsp" "sequences/sort.lsp" "sequences/stable-sort.lsp"])
 
 (defn fetch! []
   (when-not (fs/exists? (str suite "/.git"))
@@ -141,6 +143,11 @@
   #{'count 'count-if 'count-if-not 'find 'find-if 'find-if-not 'position 'position-if
     'position-if-not 'reduce 'every 'some 'notany 'notevery})
 
+;; the sequence first, then positional arguments, then keywords
+(def sequence-first
+  {'fill [1 :keys] 'replace [1 :keys] 'copy-seq [0 :keys] 'subseq [2 :positional]
+   'reverse [0 :keys] 'nreverse [0 :keys] 'sort [1 :keys] 'stable-sort [1 :keys]})
+
 ;; Common Lisp functions the suite passes or calls, and their Clojure; each
 ;; is also in ucl/conformance.clj's table, which maps them back
 (def cl->clojure
@@ -246,8 +253,22 @@
           v   (gensym "v")]
       (list* 'ucl/let (list (list v (list 'ucl/make-array 0 :adjustable true :fill-pointer 0)))
              (concat (map (fn [x] (list 'ucl/vector-push-extend (tr-symbol-data x) v)) els) [v])))
+    (sequence-first h)
+    (let [[npos mode] (sequence-first h)
+          [sq & more] args
+          pos (take npos more)
+          kvs (drop npos more)]
+      (when (nil? sq) (skip "a list (nil, the empty list, as a sequence)"))
+      (when (and (= mode :keys) (odd? (count kvs))) (skip "an odd number of keyword arguments (a program-error)"))
+      (list* (symbol "ucl" (name h)) (tr sq)
+             (concat (map (fn [x] (if (contains? #{'sort 'stable-sort} h) (tr-fn-value x) (tr x))) pos)
+                     (if (= mode :keys) (tr-keyword-args kvs) (map tr kvs)))))
     (= h 'make-array)
-    (let [[n & kvs] args]
+    (let [[n & kvs] args
+          ;; '(5): the dimensions of a one-dimensional array
+          n (if (and (seq? n) (= 'quote (first n)) (seq? (second n)) (= 1 (count (second n))))
+              (first (second n))
+              n)]
       (list* 'ucl/make-array (tr n)
              (mapcat (fn [[k v]]
                        (case k
@@ -265,6 +286,9 @@
                          (skip (str "make-array " k))))
                      (partition 2 kvs))))
     (= h 'notnot) (list 'if (tr (first args)) true nil)
+    ;; a vector's elements as a list: what `contents` gives as a vector
+    (and (= h 'map) (= ''list (first args)) (= '(function identity) (second args)) (= 3 (count args)))
+    (list 'contents (tr (nth args 2)))
     (cl->clojure h) (list* (cl->clojure h) (map tr args))
     :else (skip (str "the function " h))))
 
@@ -314,8 +338,12 @@
     (cond (or (number? v) (nil? v)) v
           (= v 't) true
           (symbol? v) (tr-symbol-data v)
+          (and (seq? v) (= 'quote (first v))) (tr-expected-1 (second v))
+          (and (seq? v) (every? #(or (nil? %) (number? %) (symbol? %)) v))
+          {:contents (mapv (fn [x] (if (nil? x) nil (tr-symbol-data x))) v)}
           (seq? v) (skip "an expected list")
-          (map? v) (skip (str "an expected " (if (:vector v) "vector" (or (:unsupported v) "string"))))
+          (and (map? v) (:vector v)) {:contents (mapv (fn [x] (if (nil? x) nil (tr-symbol-data x))) (:vector v))}
+          (map? v) (skip (str "an expected " (or (:unsupported v) "string")))
           :else (skip (str "the expected " (pr-str v))))))
 
 (defn tr-expected
@@ -330,7 +358,24 @@
   [[_ tname form & expected]]
   (try
     (let [e (tr-expected expected)
-          f (tr form)]
+          f (tr form)
+          ;; an expected vector compares with the host array's elements
+          [e f] (cond
+                  (and (map? e) (:contents e))
+                  [(:contents e) (if (= 'contents (and (seq? f) (first f))) f (list 'contents f))]
+                  (vector? e)
+                  (let [wrap (fn wrap [g]
+                               (cond (and (seq? g) (= 'vector (first g)) (= (count e) (count (rest g))))
+                                     (list* 'vector (map (fn [ex fx] (if (and (map? ex) (not= 'contents (and (seq? fx) (first fx))))
+                                                                       (list 'contents fx) fx))
+                                                         e (rest g)))
+                                     ;; through the tail of a let or do
+                                     (and (seq? g) (contains? #{'ucl/let 'ucl/let* 'do} (first g)))
+                                     (concat (butlast g) [(wrap (last g))])
+                                     :else (skip "multiple values with a vector")))]
+                    [(mapv #(if (map? %) (:contents %) %) e) (if (some map? e) (wrap f) f)])
+                  :else [e f])]
+      (when (and (vector? e) (some map? e)) (skip "multiple values with a vector"))
       (pr-str f)                          ; realize every lazy part inside the try
       {:name (str tname) :case (list 'is (list '= e f))})
     (catch clojure.lang.ExceptionInfo ex
@@ -347,6 +392,7 @@
 
 (def validator
   "(ns ansi-validate (:require [ucl.api :as ucl] [clojure.edn :as edn]))
+   (defn contents [v] (loop [i 0 acc []] (if (< i (ucl/length v)) (recur (inc i) (conj acc (ucl/elt v i))) acc)))
    (defn ucl-message [t]
      (loop [e t] (cond (nil? e) nil
                        (and (instance? clojure.lang.ExceptionInfo e) (= 'ucl (:library (ex-data e)))) (ex-message e)
@@ -423,6 +469,11 @@
                "(ns ucl.ansi-sequences-test\n"
                "  (:require [ucl.test :refer [deftest is testing]]\n"
                "            [ucl.api :as ucl]))\n\n"
+               "(defn contents\n"
+               "  \"A host vector's elements as a Clojure vector; ucl/conformance.clj reads it as identity.\"\n"
+               "  [v]\n"
+               "  (loop [i 0 acc []]\n"
+               "    (if (< i (ucl/length v)) (recur (inc i) (conj acc (ucl/elt v i))) acc)))\n\n"
                (str/join "\n\n" (for [[f rs] per-file, d (deftests f rs)] (render d)))
                "\n"))
     (let [total (reduce + (map (comp count second) per-file))
