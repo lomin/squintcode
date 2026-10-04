@@ -317,11 +317,12 @@
 
      (defn ~'replace-into
        "replace at safety 0 (I40): one copy when both vectors are typed, else a
-        loop -- downward when one vector's ranges overlap upward (CLHS replace)."
+        loop -- downward when one vector's ranges overlap upward (CLHS replace).
+        An if, not an and, in each test: Squint's and there is an IIFE."
        [~'a ~'b ~'s1 ~'s2 ~'n]
-       (if (and (js/ArrayBuffer.isView ~'a) (js/ArrayBuffer.isView ~'b))
+       (if (if (js/ArrayBuffer.isView ~'a) (js/ArrayBuffer.isView ~'b) false)
          (.set ~'a (.subarray ~'b ~'s2 (+ ~'s2 ~'n)) ~'s1)
-         (if (and (identical? ~'a ~'b) (> ~'s1 ~'s2))
+         (if (if (identical? ~'a ~'b) (> ~'s1 ~'s2) false)
            (loop [~'i (dec ~'n)]
              (when (>= ~'i 0) (aset ~'a (+ ~'s1 ~'i) (aget ~'b (+ ~'s2 ~'i))) (recur (dec ~'i))))
            (loop [~'i 0]

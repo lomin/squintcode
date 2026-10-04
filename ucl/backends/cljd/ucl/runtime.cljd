@@ -61,10 +61,12 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Variables (D30): ClojureDart cannot assign a local (H39), so a variable is
-;; a one-field cell -- `int` when declared fixnum or (signed-byte 53).
+;; a one-field cell -- `int` when declared fixnum or (signed-byte 53),
+;; `List<int>` when declared a fixnum- or sb53-vector.
 ;; ---------------------------------------------------------------------------
 
 (deftype IntCell [^:mutable ^int v])
+(deftype IntListCell [^:mutable ^#/(List int) v])
 (deftype Cell [^:mutable v])
 
 ;; ---------------------------------------------------------------------------
@@ -113,9 +115,9 @@
   (if (and (dart/is? a td/TypedData) (dart/is? b td/TypedData))
     (.setRange a s1 (+ s1 n) b s2)
     (if (and (identical? a b) (> s1 s2))
-      (loop [i (dec n)]
+      (loop [^int i (dec n)]
         (when (>= i 0) (. a "[]=" (+ s1 i) (. b "[]" (+ s2 i))) (recur (dec i))))
-      (loop [i 0]
+      (loop [^int i 0]
         (when (< i n) (. a "[]=" (+ s1 i) (. b "[]" (+ s2 i))) (recur (inc i))))))
   a)
 

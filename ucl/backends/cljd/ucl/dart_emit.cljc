@@ -189,6 +189,17 @@
 ;; The emit map
 ;; ---------------------------------------------------------------------------
 
+(defn ^:macro-support int-cell? [t] (contains? #{:fixnum :sb53} t))
+
+(defn ^:macro-support int-list-cell? [t] (contains? #{[:vector :fixnum] [:vector :sb53]} t))
+
+(defn ^:macro-support env-tag
+  "The Dart type a symbol was declared with (type-hint's tag on its
+   binding), or nil."
+  [env sym]
+  #?(:cljd/clj-host (when (symbol? sym) (some-> (find env sym) key meta :tag))
+     :cljd nil))
+
 (defn ^:macro-support emit [env]
   (let [s (safety-property)
         checked? (pos? s)]
@@ -232,13 +243,20 @@
             :write-once? true
             :write (fn [[o slot] _ v] (list 'set! (list (symbol (str ".-" (dart-name slot))) o) v))}
      ;; A variable (D30): ClojureDart cannot assign a local (H39), so it is a
-     ;; one-field cell, int-typed when declared fixnum or (signed-byte 53)
+     ;; one-field cell, int-typed when declared fixnum or (signed-byte 53),
+     ;; List<int>-typed when declared a fixnum- or sb53-vector; any other
+     ;; declared type is cast where it is read
      :var {:read-once? true
-           :read (fn [[x _] _] (list '.-v x))
+           :read (fn [[x t] _]
+                   (let [h (when-not (int-cell? t) (type-hint env t))]
+                     (if h (vary-meta (list '.-v x) assoc :tag h) (list '.-v x))))
            :write-once? true
            :write (fn [[x _] _ v] (list 'set! (list '.-v x) v))
            :bind (fn [x t init _]
-                   [x (list 'new (rt (if (contains? #{:fixnum :sb53} t) 'IntCell 'Cell)) init)])}
+                   [x (list 'new (rt (cond (int-cell? t) 'IntCell
+                                           (and (int-list-cell? t) (some? init)) 'IntListCell
+                                           :else 'Cell))
+                            init)])}
      :number {:check (fn [x] (list (rt 'check-number) x))
               :check-type (fn [t x] (list (rt (if (= t :fixnum) 'check-fixnum 'check-sb53)) x))
               :min (fn [a b] (if (and (contract/trivial? a) (contract/trivial? b))
@@ -258,7 +276,11 @@
              ;; typed setRange copy memory
              :fill (fn [& _] nil)
              :replace (fn [a b s1 s2 n] (list (rt 'replace-into) a b s1 s2 n))
-             :subseq (fn [v s e] (list (rt 'subseq-of) v s e))
+             ;; a list's own sublist keeps its static type: a declared one's,
+             ;; or the one ClojureDart inferred for a local of the expansion
+             :subseq (fn [v s e]
+                       (let [h (env-tag env v)]
+                         (list '.sublist (if h (vary-meta v assoc :tag h) v) s e)))
              :sort-native (fn [_ fallback] fallback)}
      :types {:hint (fn [t _] (type-hint env t))
              :local-hint (fn [t] (when (contains? #{:fixnum :sb53} t) 'int))
