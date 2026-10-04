@@ -34,6 +34,7 @@ bb clean             # remove out/ and ClojureScript caches
 
 ucl/run-tests.sh [jvm|cljs|squint|cljd]   # ucl suite, optionally one host
 bb ucl/ansi/translate.clj                 # regenerate test/ucl/ansi_sequences_test.cljc from the ANSI test suite
+clojure -M:jvm ucl/kondo.clj              # regenerate .clj-kondo/hooks/ucl_api.clj after adding or documenting a ucl operator
 ```
 
 REPLs: `clj -M:jvm` (Clojure) or `clj -M:cljs:repl` (ClojureScript). The
