@@ -80,10 +80,16 @@ Rules:
   `aloop`/`forv` no longer exist; they were measured slower.
 - **A loop's state lives in variables** (`ucl/let`, `ucl/let*`, or a parameter
   the body assigns): `ucl/setf`/`ucl/incf` assign them, so an inner loop is a
-  statement — `(loop [] (when test … (recur)))` is a "while". Bind a loop's
-  value with `ucl/let`, never `let`: a `loop`/`let` in expression position is an
-  IIFE on Squint (8×); `ucl/let` turns it into a statement. Assigning a plain
+  statement — `(loop [] (when test … (recur)))` is a "while". Assigning a plain
   Clojure local is a compile-time error.
+- **Nest freely inside `ucl/defun`/`ucl/defmethod`**: a `loop`, `let`, `do`,
+  `case`, `ucl/loop` or sequence function may sit in expression position —
+  `(+ total (ucl/loop for x across nums maximize x))`, `(let [s (ucl/count k v)] …)`.
+  The lifting pass (D64) turns it into a statement, so it costs no IIFE on
+  Squint (an 8× one in a hot loop) and keeps left-to-right order. It does not reach
+  inside `try`, `letfn`, `when-let`/`if-let`/`doseq`/`for`/`->` and other
+  Clojure binding or threading macros, nor outside a `ucl/defun` — there a
+  value-producing loop still wants `ucl/let`. `bb build` warns on any IIFE.
 - Use `ucl/min`/`ucl/max`, not `clojure.core`'s: Squint's are slow runtime calls.
 - Numeric equality: `==`, not `=` (Squint's `=` is a deep-equality call).
 - **A solution must compile to plain Dart**: nothing in it may call the
