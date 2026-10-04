@@ -76,3 +76,21 @@
   (ucl/let ((c 1))
     (declare (type fixnum c))
     (+ c (ucl/count-if (fn [x] (ucl/setf c 100) (> x 0)) nums))))
+
+;; A left sibling reading a vector whose contents a later sibling changes
+;; without assigning any variable (nreverse, fill, sort).
+
+(ucl/defun elt-before-nreverse (v)
+  "Left to right: elt reads v before nreverse reverses it."
+  (declare (type fixnum-vector v))
+  (+ (ucl/elt v 0) (ucl/position 3 (ucl/nreverse v))))
+
+(ucl/defun elt-before-fill (w nums)
+  "Left to right: elt reads w before the predicate fills it."
+  (declare (type fixnum-vector w nums))
+  (+ (ucl/elt w 0) (ucl/count-if (fn [x] (ucl/fill w 0) (> x 0)) nums)))
+
+(ucl/defun elt-before-sort (v)
+  "Left to right: elt reads v before sort orders it."
+  (declare (type fixnum-vector v))
+  (+ (ucl/elt v 0) (ucl/elt (ucl/sort v (fn [a b] (< a b))) 0)))

@@ -36,7 +36,10 @@
   (testing "left to right around the lifted form"
     (is (== 4 (l/reversed-then-read (arr [3 1 2]))))
     (is (== 4 (l/assigned-first (arr [1 2 3 4]))))
-    (is (== 3 (l/read-before (arr [1 2]))))))
+    (is (== 3 (l/read-before (arr [1 2]))))
+    (is (== 5 (l/elt-before-nreverse (arr [3 1 2]))))
+    (is (== 9 (l/elt-before-fill (arr [7]) (arr [1 2]))))
+    (is (== 4 (l/elt-before-sort (arr [3 1 2]))))))
 
 ;; Effects observed through an atom: tests may use anything.
 

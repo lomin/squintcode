@@ -1207,6 +1207,15 @@
                              (str ", or leave out the sequence for a function of it (a curried form)")))
                       {:form form}))))
 
+(defn ^:macro-support result-type
+  "The type of a sequence function's value when every call has one: a count
+   is a fixnum (a length is). Every other value may be nil (position, find,
+   mismatch, search), a boolean or a sequence, so it is untyped. The lifting
+   pass types the variable it lifts the call into with it (D64)."
+  [form]
+  (when (#{"count" "count-if" "count-if-not"} (name (first form)))
+    :fixnum))
+
 (defn ^:macro-support expanders
   "The registry entries of the sequence functions. A form is one of them
    only when called through ucl's alias with every argument (a curried form is
@@ -1214,7 +1223,8 @@
   []
   (into {}
         (map (fn [[fname spec]]
-               [fname {:applies? (fn [form] (and (ucl-call? form)
-                                                 (= :full (call-shape spec (rest form)))))
-                       :expand   expand}]))
+               [fname {:applies?    (fn [form] (and (ucl-call? form)
+                                                    (= :full (call-shape spec (rest form)))))
+                       :expand      expand
+                       :result-type result-type}]))
         (specs)))

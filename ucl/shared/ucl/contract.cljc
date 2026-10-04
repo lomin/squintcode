@@ -622,7 +622,8 @@
 ;; lifted form is bound to a temporary first -- a symbol only when a later
 ;; sibling assigns (setf/incf/decf), since nothing else can change it. That
 ;; temporary is taken on every host: ClojureDart hoists such forms itself and
-;; would read a ucl variable after a later sibling assigned it.
+;; would read a ucl variable after a later sibling assigned it, or an element
+;; after a later sibling changed it (nreverse, fill, sort: no assignment).
 ;;
 ;; The backend's `:lift` says what is lifted: `:all` (IIFE hosts), `:loops`
 ;; (the JVM: a form whose value comes from a loop), nil (ClojureDart, which
@@ -681,6 +682,19 @@
       :loops (loop-tail? backend form)
       false)))
 
+(defn ^:macro-support hoists?
+  "Does `form` hold, evaluated with it, a form ClojureDart compiles to
+   statements -- run before every sibling to its left that is not a
+   temporary? A closure's body is not evaluated with it."
+  [backend form]
+  (cond
+    (and (seq? form) (seq form))
+    (cond (contains? #{"quote" "fn" "fn*"} (head-name form)) false
+          (lift-needed? (assoc backend :lift :all) form)   true
+          :else (boolean (some #(hoists? backend %) form)))
+    (coll? form) (boolean (some #(hoists? backend %) form))
+    :else false))
+
 (defn ^:macro-support lift-body
   "`forms`, a body in statement and return position, with every form that
    must not be in expression position lifted out of it (D64)."
@@ -734,7 +748,9 @@
                           need? (and (worth-temp? a)
                                      (or (boolean (some assigns? (subvec args (inc i))))
                                          (and (not (symbol? a))
-                                              (boolean (some has-ops? (subvec rs (inc i)))))))]
+                                              (boolean (or (some has-ops? (subvec rs (inc i)))
+                                                           (and (nil? mode)
+                                                                (some #(hoists? backend %) (subvec args (inc i)))))))))]
                       (if need?
                         (let [t (temp)] (recur (inc i) (conj (into ops o) [:let t a]) (conj out t)))
                         (recur (inc i) (into ops o) (conj out a))))))))
