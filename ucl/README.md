@@ -1786,10 +1786,9 @@ backend selection by source root; mutable host collections only.
 - **Lifting** (D64, I39). Lifted forms inside `try`, `letfn` or Clojure's
   binding macros (`when-let`, `doseq`) stay IIFEs, as does one outside a
   `ucl/defun`, `ucl/defmethod` or registered form. On the JVM a `let` around
-  a lifted loop is lifted whole into an untyped cell. On ClojureDart, which
-  hoists such forms itself, only a later assignment triggers a temporary: a
-  left sibling reading a vector a later sibling mutates is left to
-  ClojureDart's own order.
+  a lifted loop is lifted whole into an untyped cell. Lifted sequence
+  functions other than the counts are untyped (their value may be nil, a
+  boolean or a sequence).
 - **`ucl/loop` and blocks** (D53–D62):
   - The ports (§9.14) are equal or faster on Dart; on V8 121 is +13% for its
     clause order, and 2762 +4–9%, near the run-to-run spread -- accepted
