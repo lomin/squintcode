@@ -148,30 +148,7 @@
         p (if (contains? spec :seq-pos) (:seq-pos spec) 1)]
     (list* h (concat (take p args) [s] (drop p args)))))
 
-(defn ^:macro-support usage [fname]
-  (case fname
-    ("count" "find" "position") (str "(" fname " item sequence &key from-end start end key test test-not)")
-    ("remove" "delete")         (str "(" fname " item sequence &key from-end test test-not start end count key)")
-    ("remove-if" "remove-if-not" "delete-if" "delete-if-not")
-    (str "(" fname " predicate sequence &key from-end start end count key)")
-    ("substitute" "nsubstitute") (str "(" fname " newitem olditem sequence &key from-end test test-not start end count key)")
-    ("substitute-if" "substitute-if-not" "nsubstitute-if" "nsubstitute-if-not")
-    (str "(" fname " newitem predicate sequence &key from-end start end count key)")
-    "reduce"                    "(reduce function sequence &key key from-end start end initial-value)"
-    ("every" "some" "notany" "notevery") (str "(" fname " predicate sequence &rest sequences)")
-    "fill"                      "(fill sequence item &key start end)"
-    "replace"                   "(replace sequence-1 sequence-2 &key start1 end1 start2 end2)"
-    ("copy-seq" "reverse" "nreverse") (str "(" fname " sequence)")
-    "subseq"                    "(subseq sequence start &optional end)"
-    ("sort" "stable-sort")      (str "(" fname " sequence predicate &key key)")
-    ("remove-duplicates" "delete-duplicates") (str "(" fname " sequence &key from-end test test-not start end key)")
-    "make-sequence"             "(make-sequence result-type size &key initial-element)"
-    "map"                       "(map result-type function sequence &rest sequences)"
-    "map-into"                  "(map-into result-sequence function &rest sequences)"
-    "concatenate"               "(concatenate result-type &rest sequences)"
-    "merge"                     "(merge result-type sequence-1 sequence-2 predicate &key key)"
-    ("mismatch" "search")       (str "(" fname " sequence-1 sequence-2 &key from-end test test-not key start1 start2 end1 end2)")
-    (str "(" fname " predicate sequence &key from-end start end key)")))
+(defn ^:macro-support usage [fname] (contract/vocabulary-usage fname))
 
 (defn ^:macro-support parse-keys
   "The keyword arguments of a call, in written order, after checking them:

@@ -1702,6 +1702,121 @@
     remove-duplicates delete-duplicates mismatch search
     make-sequence map map-into concatenate merge])
 
+(defn ^:macro-support vocabulary-usage
+  "A sequence function's lambda list, as CLHS writes it."
+  [fname]
+  (case fname
+    ("count" "find" "position") (str "(" fname " item sequence &key from-end start end key test test-not)")
+    ("remove" "delete")         (str "(" fname " item sequence &key from-end test test-not start end count key)")
+    ("remove-if" "remove-if-not" "delete-if" "delete-if-not")
+    (str "(" fname " predicate sequence &key from-end start end count key)")
+    ("substitute" "nsubstitute") (str "(" fname " newitem olditem sequence &key from-end test test-not start end count key)")
+    ("substitute-if" "substitute-if-not" "nsubstitute-if" "nsubstitute-if-not")
+    (str "(" fname " newitem predicate sequence &key from-end start end count key)")
+    "reduce"                    "(reduce function sequence &key key from-end start end initial-value)"
+    ("every" "some" "notany" "notevery") (str "(" fname " predicate sequence &rest sequences)")
+    "fill"                      "(fill sequence item &key start end)"
+    "replace"                   "(replace sequence-1 sequence-2 &key start1 end1 start2 end2)"
+    ("copy-seq" "reverse" "nreverse") (str "(" fname " sequence)")
+    "subseq"                    "(subseq sequence start &optional end)"
+    ("sort" "stable-sort")      (str "(" fname " sequence predicate &key key)")
+    ("remove-duplicates" "delete-duplicates") (str "(" fname " sequence &key from-end test test-not start end key)")
+    "make-sequence"             "(make-sequence result-type size &key initial-element)"
+    "map"                       "(map result-type function sequence &rest sequences)"
+    "map-into"                  "(map-into result-sequence function &rest sequences)"
+    "concatenate"               "(concatenate result-type &rest sequences)"
+    "merge"                     "(merge result-type sequence-1 sequence-2 predicate &key key)"
+    ("mismatch" "search")       (str "(" fname " sequence-1 sequence-2 &key from-end test test-not key start1 start2 end1 end2)")
+    (str "(" fname " predicate sequence &key from-end start end key)")))
+
+(defn ^:macro-support vocabulary-description
+  "What a sequence function returns, for its docstring."
+  [fname]
+  (case fname
+    ("count" "count-if" "count-if-not")
+    "The number of elements that satisfy the test."
+    ("find" "find-if" "find-if-not")
+    "The leftmost element that satisfies the test (the rightmost with :from-end), or nil."
+    ("position" "position-if" "position-if-not")
+    "The index of the leftmost element that satisfies the test (the rightmost with :from-end), or nil."
+    "reduce"
+    "The elements combined by a function of two arguments, left-associatively (right with :from-end)."
+    "every"    "True when the predicate is true of every element (of every sequence, in parallel)."
+    "some"     "The predicate's first true value over the elements, or nil."
+    "notany"   "True when the predicate is false of every element."
+    "notevery" "True when the predicate is false of some element."
+    "fill"     "Stores item at every index of [start, end); returns sequence."
+    "replace"  "Copies the elements of sequence-2 into sequence-1, in place; returns sequence-1."
+    "copy-seq" "A fresh copy of the sequence."
+    "subseq"   "A fresh vector of the elements in [start, end). A place for setf: (setf (subseq v s e) new)."
+    "reverse"  "A fresh vector of the elements in reverse order."
+    "nreverse" "Reverses the sequence in place and returns it."
+    "sort"     "Sorts the sequence in place by predicate and returns it."
+    "stable-sort" "Sorts the sequence in place by predicate, equal elements keeping their order, and returns it."
+    ("remove" "remove-if" "remove-if-not")
+    "A fresh vector without the elements that satisfy the test (at most :count of them)."
+    ("delete" "delete-if" "delete-if-not")
+    "remove, allowed to modify the sequence."
+    ("substitute" "substitute-if" "substitute-if-not")
+    "A fresh vector with newitem in place of each element that satisfies the test (at most :count)."
+    ("nsubstitute" "nsubstitute-if" "nsubstitute-if-not")
+    "substitute, in place: returns the sequence."
+    "remove-duplicates"
+    "A fresh vector keeping one of each set of equal elements: the last, or the first with :from-end."
+    "delete-duplicates" "remove-duplicates, allowed to modify the sequence."
+    "mismatch" "The index in sequence-1 where the two sequences first differ, or nil."
+    "search"   "The index in sequence-2 where sequence-1 first occurs, or nil."
+    "make-sequence" "A fresh vector of result-type with size elements."
+    "map"      "A vector of result-type of the function's values over the elements, in parallel; nil for effect only."
+    "map-into" "Stores the function's values over the sequences into result-sequence and returns it."
+    "concatenate" "A fresh vector of result-type holding every sequence's elements in order."
+    "merge"    "A stable merge of two sequences sorted by predicate, as a vector of result-type."))
+
+(defn ^:macro-support vocabulary-arglists
+  "A function's lambda list (its usage) as Clojure arglists: &optional
+   gives an arity per optional parameter, &rest `& more`, &key a map."
+  [fname]
+  (let [ws    (map symbol (rest (re-seq #"[^() ]+" (vocabulary-usage fname))))
+        part  (fn [k] (take-while #(not (contains? #{'&optional '&rest '&key} %))
+                                  (rest (drop-while #(not= k %) ws))))
+        req   (vec (take-while #(not (contains? #{'&optional '&rest '&key} %)) ws))
+        opt   (part '&optional)
+        more  (part '&rest)
+        ks    (part '&key)
+        tail  (cond-> []
+                (seq more) (into ['& (first more)])
+                (seq ks)   (into ['& {:keys (vec ks)}]))]
+    (apply list (concat (map #(into req (take % opt)) (range (count opt)))
+                        [(into (into req opt) tail)]))))
+
+(defn ^:macro-support vocabulary-doc
+  "A vocabulary operator's docstring and arglists, for the macro defapi
+   defines for it: what an editor shows."
+  [fname]
+  (case fname
+    "loop"
+    {:doc (str "(loop clause...)\n\n"
+               "Common Lisp's LOOP for vectors and numbers: for ... across, for ... from/below/to/by,"
+               " for k being the hash-keys of h [using (hash-value v)], for ... and ...,"
+               " sum/count/maximize/minimize [into v] [of-type T], when/unless/else,"
+               " while/until/repeat, always/never/thereis, with, initially, finally, named;"
+               " (loop-finish) ends it. No list clauses.\n\n"
+               "With a binding vector it is Clojure's loop.")
+     :arglists '([& clauses])}
+    "loop-finish"
+    {:doc (str "(loop-finish)\n\nEnds the enclosing ucl/loop normally: its finally clauses run"
+               " and it returns its accumulated value.")
+     :arglists '([])}
+    {:doc (str (vocabulary-usage fname) "\n\n" (vocabulary-description fname) "\n\n"
+               "Common Lisp's " fname " on vectors (CLHS 17), expanded inline."
+               (when (re-find #"predicate|function|key" (vocabulary-usage fname))
+                 " A literal fn argument is written into the loop.")
+               (when-not (contains? #{"every" "some" "notany" "notevery" "make-sequence" "map"
+                                      "map-into" "concatenate"}
+                                    fname)
+                 " Called without its sequence, it is a function of the sequence."))
+     :arglists (vocabulary-arglists fname)}))
+
 (defn ^:macro-support expand-vocabulary
   "A vocabulary macro's expansion: its name's registry entry, called on the
    whole form. No `:applies?`: the macro is already the right form."
@@ -1755,6 +1870,7 @@
         (~'contract/expand-read ~emit-form (list '~'slot-value ~'object ~'slot)))
       (defmacro ~'setf
         "(setf place value ...) -- assign; returns the last value."
+        {:arglists '~'([place value & more-places-and-values])}
         [& ~'pairs]
         (~'contract/expand-setf ~emit-form ~'pairs))
       (defmacro ~'incf
@@ -1771,14 +1887,17 @@
         (~'contract/expand-length ~emit-form ~'sequence))
       (defmacro ~'vector-push-extend
         "(vector-push-extend new-element vector) -- returns the new element's index."
+        {:arglists '~'([new-element vector])}
         [& ~'args]
         (~'contract/expand-vector-push-extend ~emit-form ~'args))
       (defmacro ~'make-array
         "(make-array n &key element-type initial-element initial-contents adjustable fill-pointer)"
+        {:arglists '~'([n & {:keys [element-type initial-element initial-contents adjustable fill-pointer]}])}
         [~'n & ~'opts]
         (~'contract/expand-make-array ~emit-form ~'n ~'opts))
       (defmacro ~'make-hash-table
         "(make-hash-table &key test size initial-contents)"
+        {:arglists '~'([& {:keys [test size initial-contents]}])}
         [& ~'opts]
         (~'contract/expand-make-hash-table ~emit-form ~'opts))
       (defmacro ~'defun
@@ -1834,8 +1953,9 @@
         [~'slots ~'object & ~'body]
         (~'contract/expand-with-slots ~emit-form ~'slots ~'object ~'body))
       ~@(map (fn [n]
-               `(defmacro ~n [& ~'args]
-                  (~'contract/expand-vocabulary ~emit-form ~'&form)))
+               (let [{:keys [doc arglists]} (vocabulary-doc (name n))]
+                 `(defmacro ~n ~doc {:arglists '~arglists} [& ~'args]
+                    (~'contract/expand-vocabulary ~emit-form ~'&form))))
              (vocabulary-names))
       ~@(when-not (:inline-extrema? opts)
           [`(defmacro ~'min
