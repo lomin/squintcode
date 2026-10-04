@@ -1091,6 +1091,22 @@ a third to a half around a short one, more when captured variables move from
 registers into its context (H58). (The two statement forms differ by up to
 19% in the wrong direction -- a code-layout effect; compare within a pair.)
 
+With automatic lifting (D64), the same kernel written as a solution would write it --
+`(recur (inc r) (+ total (ucl/count-if (fn [x] (> x k)) xs :start r :end (+ r w))))`,
+and again inside `(ucl/setf total (+ total …))` reading assigned outer `ucl/let`s --
+compiled by Squint at safety 0 before the pass (e004324, an IIFE) and after it
+(none); the control writes the count through D35 by hand. Same protocol.
+
+| inner loop | control (D35) | before: IIFE | lifted | before, reads outer `let`s | lifted |
+|---|---|---|---|---|---|
+| W = 100 | 14195 | 14927 | 14019 (−6%) | 12860 | 11667 (−9%) |
+| W = 4 | 777 | 984 | 805 (−18%) | 1056 | 860 (−19%) |
+
+Lifting recovers the IIFE's cost; what is left against the control (≤4%) is
+the extra variable. ClojureDart compiles these forms as statements already and
+the pass lifts nothing there (`:lift` nil), so its output for this kernel is
+unchanged.
+
 ### 9.12 Exits through exceptions (`bench/exit/`)
 
 Could `(return x)` be legal anywhere -- a throw caught at the block -- instead
