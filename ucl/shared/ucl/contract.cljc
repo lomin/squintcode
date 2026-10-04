@@ -585,7 +585,10 @@
 ;;
 ;; An entry for a form that establishes a block (D56) also has
 ;;   :block (fn [form] [name])   ; the block's name, in a vector: nil is a name
-;; so that an exit inside it to that name is known to be its own.
+;; so that an exit inside it to that name is known to be its own. And it may
+;; have
+;;   :result-type (fn [form] t)  ; :fixnum, :sb53 or nil: the form's value type
+;; which types the variable the lifting pass computes it into (D64, I39).
 ;;
 ;; defapi puts every entry into the backend map as `:expanders`: the
 ;; contract's own (`builtin-expanders`, defined last: its entries call
@@ -604,8 +607,310 @@
         e (when n (get (:expanders backend) n))]
     (when (and e ((:applies? e) form)) e)))
 
-(defn ^:macro-support expand-registered [backend form]
-  ((:expand (registered backend form)) backend form))
+;; ===========================================================================
+;; Lifting (D64, I39): loop-shaped forms out of expression position
+;; ===========================================================================
+;; On Squint and ClojureScript a `let`, `loop`, `do`, `case` or multi-form
+;; `when` in expression position is an IIFE, 8x in a hot loop (§9.3); the JVM
+;; wraps a `loop` there in a one-shot fn (H36). Every ucl/defun and
+;; ucl/defmethod body, every block and every registered expansion's output is
+;; lifted before it compiles: such a form is moved to the nearest statement
+;; boundary, where `(setf (%var g type) form)` runs it as a statement (D35)
+;; into a fresh internal variable, and the expression reads the variable.
+;;
+;; Left to right is kept (CLHS 3.1.2.1.2.3): a sibling evaluated before a
+;; lifted form is bound to a temporary first -- a symbol only when a later
+;; sibling assigns (setf/incf/decf), since nothing else can change it. That
+;; temporary is taken on every host: ClojureDart hoists such forms itself and
+;; would read a ucl variable after a later sibling assigned it.
+;;
+;; The backend's `:lift` says what is lifted: `:all` (IIFE hosts), `:loops`
+;; (the JVM: a form whose value comes from a loop), nil (ClojureDart, which
+;; compiles them as statements already: a variable there would only cost).
+;; A form nothing needs to lift comes back identical, so code without such a
+;; form compiles exactly as before.
+
+(defn ^:macro-support lift-opaque?
+  "A form the lifting pass leaves alone: its subforms are not in plain
+   left-to-right expression positions, or are not code."
+  [n]
+  (contains? #{"quote" "var" "letfn" "letfn*" "try" "declare" "def" "defn" "ns" "comment"
+               "when-let" "if-let" "when-some" "if-some" "when-first" "doseq" "for"
+               "dotimes" "doto" "->" "->>" "cond->" "cond->>" "some->" "some->>" "as->"
+               "binding" "with-open" "while" "condp" "locking" "lazy-seq" "delay"
+               "return-from" "return" "reify" "deftype" "defrecord" "proxy" "case*"}
+             n))
+
+(defn ^:macro-support assigns?
+  "Does `form` assign a variable anywhere -- a closure's body included?"
+  [form]
+  (cond (and (seq? form) (seq form))
+        (or (contains? #{"setf" "incf" "decf"} (head-name form))
+            (and (not= "quote" (head-name form)) (boolean (some assigns? form))))
+        (map? form)  (boolean (some assigns? (concat (keys form) (vals form))))
+        (coll? form) (boolean (some assigns? form))
+        :else false))
+
+(defn ^:macro-support loop-tail?
+  "Does `form`'s value come from a loop -- a registered form or `loop`?"
+  [backend form]
+  (let [n (head-name form)
+        t #(loop-tail? backend %)]
+    (cond
+      (nil? n) false
+      (registered backend form) true
+      (contains? #{"loop" "loop*"} n) (vector? (second form))
+      (contains? #{"let" "let*" "do" "with-slots" "when" "when-not"} n) (t (last form))
+      (contains? #{"if" "if-not"} n) (boolean (some t (nnext form)))
+      (= "cond" n) (boolean (some t (take-nth 2 (nnext form))))
+      (= "case" n) (let [cl (nnext form)]
+                     (boolean (some t (concat (take-nth 2 (rest cl)) (when (odd? (count cl)) [(last cl)])))))
+      :else false)))
+
+(defn ^:macro-support lift-needed?
+  "Must `form`, in expression position, be lifted on this backend?"
+  [backend form]
+  (let [n (head-name form)]
+    (case (:lift backend)
+      :all   (boolean
+              (or (registered backend form)
+                  (and (contains? #{"let" "let*" "loop" "loop*"} n)
+                       (or (vector? (second form)) (seq? (second form))))
+                  (contains? #{"do" "case" "with-slots"} n)
+                  (and (contains? #{"when" "when-not"} n) (< 3 (count form)))))
+      :loops (loop-tail? backend form)
+      false)))
+
+(defn ^:macro-support lift-body
+  "`forms`, a body in statement and return position, with every form that
+   must not be in expression position lifted out of it (D64)."
+  [backend forms]
+  (let [mode   (:lift backend)
+        bind   (op backend :var :bind)
+        read   (op backend :var :read)
+        setf   (symbol "ucl.api" "setf")
+        temp   (fn [] (vary-meta (gensym "t") assoc ::temp true))
+        same?  (fn [xs ys] (and (= (count xs) (count ys)) (every? true? (map identical? xs ys))))
+        rebuild (fn [form parts]
+                  (if (same? (rest form) parts)
+                    form
+                    (with-meta (apply list (first form) parts) (meta form))))
+        worth-temp? (fn [x] (not (or (literal? x) (quoted? x) (and (symbol? x) (::temp (meta x))))))
+        has-ops? (fn [r] (boolean (seq (first r))))
+        wrap   (fn [ops form]
+                 (reduce (fn [inner [k a b]]
+                           (case k
+                             :let  (list 'let [a b] inner)
+                             :var  (list 'let (bind a b (if (integer-type? b) 0 nil) {:internal? true}) inner)
+                             :stmt (if (= "do" (head-name inner))
+                                     (list* 'do a (rest inner))
+                                     (list 'do a inner))))
+                         form (reverse ops)))
+        var-place? (fn [p] (or (symbol? p) (= "%var" (head-name p))))]
+    (letfn [(body [forms]
+              (let [fs (mapv stmt forms)]
+                (if (same? forms fs) forms (apply list fs))))
+            (one [forms] (if (next forms) (list* 'do forms) (first forms)))
+            (local [form] [[] (stmt form)])
+            ;; the value of `form` from a fresh variable, `form` a statement
+            (whole [form]
+              (if mode
+                (let [g  (gensym "lifted")
+                      e  (registered backend form)
+                      rt (when e (:result-type e))
+                      t  (when rt (rt form))]
+                  [[[:var g t] [:stmt (list setf (list '%var g t) (stmt form))]]
+                   (read [g t] [g t])])
+                (local form)))
+            ;; [ops args]: `args` evaluated left to right after `ops`
+            (anf [args]
+              (let [args (vec args)
+                    rs   (mapv expr args)
+                    n    (count args)]
+                (loop [i 0 ops [] out []]
+                  (if (= i n)
+                    [ops (if (same? args out) args out)]
+                    (let [[o a] (rs i)
+                          need? (and (worth-temp? a)
+                                     (or (boolean (some assigns? (subvec args (inc i))))
+                                         (and (not (symbol? a))
+                                              (boolean (some has-ops? (subvec rs (inc i)))))))]
+                      (if need?
+                        (let [t (temp)] (recur (inc i) (conj (into ops o) [:let t a]) (conj out t)))
+                        (recur (inc i) (into ops o) (conj out a))))))))
+            (fn-form [form]
+              (let [[h & more] form
+                    [nm more] (if (symbol? (first more)) [[(first more)] (rest more)] [[] more])
+                    arity (fn [a] (if (and (seq? a) (vector? (first a)))
+                                    (let [b (rest a) b' (body b)]
+                                      (if (identical? b b') a (with-meta (list* (first a) b') (meta a))))
+                                    a))]
+                (if (vector? (first more))
+                  (let [a' (arity more)]
+                    (if (identical? a' more) form (with-meta (list* h (concat nm a')) (meta form))))
+                  (let [as (mapv arity more)]
+                    (if (same? more as) form (with-meta (list* h (concat nm as)) (meta form)))))))
+            (setf-form [form stmt?]
+              (let [pairs (rest form)]
+                (cond
+                  (or (empty? pairs) (odd? (count pairs))) [[] form]
+                  (next (next pairs))
+                  (let [d (list* 'do (map (fn [[p v]] (list (first form) p v)) (partition 2 pairs)))]
+                    (if stmt? (local d) (expr d)))
+                  :else
+                  (let [[p v] pairs]
+                    (cond
+                      (and (var-place? p) stmt?) [[] (rebuild form [p (stmt v)])]
+                      (var-place? p) (let [[ops v'] (expr v)] [ops (rebuild form [p v'])])
+                      (and (seq? p) (seq p))
+                      (let [k (count (rest p))
+                            [ops args] (anf (concat (rest p) [v]))]
+                        [ops (rebuild form [(rebuild p (take k args)) (nth args k)])])
+                      :else [[] form])))))
+            (modify-form [form]
+              (let [[_ p & d] form]
+                (cond
+                  (var-place? p) (let [[ops d'] (anf d)] [ops (rebuild form (cons p d'))])
+                  (and (seq? p) (seq p))
+                  (let [k (count (rest p))
+                        [ops args] (anf (concat (rest p) d))]
+                    [ops (rebuild form (cons (rebuild p (take k args)) (drop k args)))])
+                  :else [[] form])))
+            (let-form [form]
+              (let [[head bs & bdy] form
+                    steps (mapv (fn [[nm init]] [nm (expr init)]) (partition 2 bs))
+                    bdy'  (body bdy)]
+                (if (some #(has-ops? (second %)) steps)
+                  (wrap (vec (mapcat (fn [[nm [ops i]]] (conj ops [:let nm i])) steps)) (one bdy'))
+                  (let [bs' (vec (mapcat (fn [[nm [_ i]]] [nm i]) steps))]
+                    (if (and (same? bs bs') (identical? bdy bdy'))
+                      form
+                      (with-meta (list* head (with-meta bs' (meta bs)) bdy') (meta form)))))))
+            (loop-form [form]
+              (let [[head bs & bdy] form
+                    pairs (partition 2 bs)]
+                (if (and (some #(has-ops? (expr (second %))) pairs)
+                         (every? #(symbol? (first %)) pairs))
+                  ;; the inits run before the loop, never on its recur path
+                  (stmt (list 'let (vec (mapcat (fn [[nm i]] [nm i]) pairs))
+                              (list* head (vec (mapcat (fn [[nm _]] [nm nm]) pairs)) bdy)))
+                  (let [bdy' (body bdy)]
+                    (if (identical? bdy bdy') form (with-meta (list* head bs bdy') (meta form)))))))
+            (ucl-let [form]
+              (let [[head bs & more] form
+                    [decls bdy] (split-with declare-form? more)
+                    bs'  (map (fn [b]
+                                (if (and (seq? b) (= 2 (count b)))
+                                  (let [i' (stmt (second b))]
+                                    (if (identical? i' (second b)) b (list (first b) i')))
+                                  b))
+                              bs)
+                    bdy' (body bdy)]
+                (if (and (same? bs bs') (identical? bdy bdy'))
+                  form
+                  (with-meta (list* head (apply list bs') (concat decls bdy')) (meta form)))))
+            ;; `form` in statement or return position: its value, if used, is kept
+            (stmt [form]
+              (let [n (head-name form)]
+                (cond
+                  (not (and (seq? form) (seq form))) (let [[ops f] (expr form)] (wrap ops f))
+                  (registered backend form) form
+                  (nil? n) (let [[ops f] (expr form)] (wrap ops f))
+                  (lift-opaque? n) form
+                  (contains? #{"fn" "fn*"} n) (fn-form form)
+                  (contains? #{"if" "if-not"} n)
+                  (let [[ops c] (expr (second form))]
+                    (wrap ops (rebuild form (cons c (mapv stmt (nnext form))))))
+                  (contains? #{"when" "when-not"} n)
+                  (let [[ops c] (expr (second form))]
+                    (wrap ops (rebuild form (cons c (body (nnext form))))))
+                  (= "cond" n)
+                  (let [cs (vec (partition 2 (rest form)))]
+                    (cond
+                      (odd? (count (rest form))) form
+                      (some #(has-ops? (expr (first %))) (rest cs))
+                      (stmt (reduce (fn [else [c e]]
+                                      (if (or (keyword? c) (true? c)) e (list 'if c e else)))
+                                    nil (reverse cs)))
+                      :else
+                      (let [[ops t1] (expr (ffirst cs))]
+                        (wrap ops (rebuild form (mapcat (fn [i [c e]] [(if (zero? i) t1 c) (stmt e)])
+                                                        (range) cs))))))
+                  (= "case" n)
+                  (let [[ops e] (expr (second form))
+                        cl  (vec (nnext form))
+                        cnt (count cl)]
+                    (wrap ops (rebuild form (cons e (map-indexed (fn [i c] (if (and (even? i) (< (inc i) cnt)) c (stmt c)))
+                                                                 cl)))))
+                  (= "do" n) (rebuild form (body (rest form)))
+                  (and (contains? #{"let" "let*"} n) (vector? (second form))) (let-form form)
+                  (and (contains? #{"loop" "loop*"} n) (vector? (second form))) (loop-form form)
+                  (and (contains? #{"let" "let*"} n) (seq? (second form))) (ucl-let form)
+                  (= "with-slots" n)
+                  (let [[_ slots obj & bdy] form
+                        [ops obj'] (expr obj)]
+                    (wrap ops (rebuild form (list* slots obj' (body bdy)))))
+                  (= "setf" n) (let [[ops f] (setf-form form true)] (wrap ops f))
+                  (contains? #{"incf" "decf"} n) (let [[ops f] (modify-form form)] (wrap ops f))
+                  (= "recur" n) (let [[ops args] (anf (rest form))] (wrap ops (rebuild form args)))
+                  :else (let [[ops f] (expr form)] (wrap ops f)))))
+            ;; [ops form']: `form` in expression position, after `ops`
+            (expr [form]
+              (let [n (head-name form)]
+                (cond
+                  (vector? form) (let [[ops xs] (anf form)]
+                                   [ops (if (identical? xs form) form (with-meta xs (meta form)))])
+                  (not (and (seq? form) (seq form))) [[] form]
+                  (registered backend form) (if (lift-needed? backend form) (whole form) [[] form])
+                  (nil? n) (let [[ops xs] (anf form)]
+                             [ops (if (same? form xs) form (with-meta (apply list xs) (meta form)))])
+                  (lift-opaque? n) [[] form]
+                  (contains? #{"fn" "fn*"} n) [[] (fn-form form)]
+                  (and (= "do" n) (= :all mode))
+                  (let [fs (vec (rest form))]
+                    (if (empty? fs)
+                      [[] nil]
+                      (let [[ops l] (expr (peek fs))]
+                        [(into (mapv (fn [s] [:stmt (stmt s)]) (pop fs)) ops) l])))
+                  (lift-needed? backend form) (whole form)
+                  (or (contains? #{"if" "if-not" "cond"} n)
+                      (and (contains? #{"when" "when-not"} n) (= 3 (count form))))
+                  (let [rs (mapv expr (rest form))]
+                    (cond
+                      (and (= "cond" n) (odd? (count rs))) [[] form]
+                      (some has-ops? (rest rs))
+                      (let [[ops c] (first rs)
+                            f (rebuild form (cons c (nnext form)))]
+                        (if (= :all mode)
+                          (let [[o2 f] (whole f)] [(into ops o2) f])
+                          [ops (stmt f)]))
+                      :else [(first (first rs)) (rebuild form (map second rs))]))
+                  (contains? #{"and" "or"} n)
+                  (let [[a & more] (rest form)
+                        rs (mapv expr (rest form))]
+                    (if (some has-ops? (rest rs))
+                      (let [t (temp)
+                            more (if (next more) (list* (first form) more) (first more))]
+                        (expr (list 'let [t a] (if (= "and" n) (list 'if t more t) (list 'if t t more)))))
+                      [(first (first rs)) (rebuild form (map second rs))]))
+                  (contains? #{"let" "let*" "loop" "loop*" "do" "case" "with-slots" "when" "when-not"} n)
+                  (local form)
+                  (= "setf" n) (setf-form form false)
+                  (contains? #{"incf" "decf"} n) (modify-form form)
+                  (= "set!" n) (let [[ops xs] (anf (nnext form))]
+                                 [ops (rebuild form (cons (second form) xs))])
+                  :else (let [[ops xs] (anf (rest form))] [ops (rebuild form xs)]))))]
+      (body forms))))
+
+(defn ^:macro-support lift-form
+  "One form in statement or return position, lifted (D64)."
+  [backend form]
+  (first (lift-body backend [form])))
+
+(defn ^:macro-support expand-registered
+  "A registered form's expansion, lifted (D64)."
+  [backend form]
+  (lift-form backend ((:expand (registered backend form)) backend form)))
 
 (defn ^:macro-support expand-counted-loop
   "A loop of `v` from 0 below `n`, which is evaluated once, running `body`
@@ -790,8 +1095,9 @@
     (list* 'do a (rest b))
     (list 'do a b)))
 
-(defn ^:macro-support expand-block
-  "One form: `body` as the block `name`, every exit to it static (D55)."
+(defn ^:macro-support compile-block
+  "One form: `body`, already lifted, as the block `name`, every exit to it
+   static (D55)."
   [backend name body]
   (if-not (some #(exits? backend name %) body)
     (if (next body) (list* 'do body) (first body))
@@ -947,12 +1253,20 @@
                   out)
             out))))))
 
-(defn ^:macro-support expand-block-body
-  "`body` (forms) as the block `name`: unchanged when nothing exits to it."
+(defn ^:macro-support expand-block
+  "One form: `body` as the block `name`, lifted (D64), every exit to it
+   static (D55). Lifting first puts more exits in statement position."
   [backend name body]
-  (if (some #(exits? backend name %) body)
-    [(expand-block backend name body)]
-    body))
+  (compile-block backend name (lift-body backend body)))
+
+(defn ^:macro-support expand-block-body
+  "`body` (forms) as the block `name`, lifted (D64): otherwise unchanged when
+   nothing exits to it."
+  [backend name body]
+  (let [body (lift-body backend body)]
+    (if (some #(exits? backend name %) body)
+      [(compile-block backend name body)]
+      body)))
 
 (defn ^:macro-support expand-stray-exit
   "An exit no block compiled: it has no block, or none could make it static."
@@ -1378,7 +1692,7 @@
   [backend form]
   (let [e (get (:expanders backend) (head-name form))]
     (if e
-      ((:expand e) backend form)
+      (lift-form backend ((:expand e) backend form))
       (fail! (str "no vocabulary in this backend defines " (first form)
                   " -- is it in defapi's :vocabularies?")
              {:form form}))))

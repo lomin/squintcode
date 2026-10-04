@@ -299,6 +299,8 @@
 (defn emit [env]
   (clojure.core/let [s (safety)]
     {:safety s
+     ;; a loop in expression position is wrapped in a fn (H36, D64)
+     :lift :loops
      :elt {:read-once? true
            :read  (fn [[a i] [sa]]
                     (case (seq-kind env sa)

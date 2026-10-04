@@ -193,6 +193,8 @@
   (let [s (safety-property)
         checked? (pos? s)]
     {:safety s
+     ;; no :lift -- ClojureDart compiles a let or loop in expression position
+     ;; as statements; a lifted variable would only cost (D64)
      ;; Dart checks every index itself (RangeError), at any safety
      :elt {:read-once? true
            :read (fn [[a i] _] (list '. a "[]" i))

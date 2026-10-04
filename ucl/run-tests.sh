@@ -95,12 +95,15 @@ if grep -rqE 'elt_checked|elt_set_checked|check_number|push_checked' "$OUT/squin
   echo "safety 0 output still contains checks"; exit 1
 fi
 echo "no checks emitted at safety 0"
-# D29, D35: variables exist so that a loop's state needs no IIFE. The kernels are
-# LeetCode-shaped; their submission build must contain none.
-if grep -q '(() =>' "$OUT/squint0/js/ucl/kernels.mjs"; then
-  echo "ucl/kernels compiles to an IIFE at safety 0:"; grep -n -B2 -A2 '(() =>' "$OUT/squint0/js/ucl/kernels.mjs"; exit 1
-fi
-echo "no IIFE in the kernels at safety 0"
+# D29, D35, D64: variables and the lifting pass exist so that a loop's state
+# and value need no IIFE. The kernels and ucl/lifted are LeetCode-shaped; their
+# submission build must contain none.
+for m in kernels lifted; do
+  if grep -q '(() =>' "$OUT/squint0/js/ucl/$m.mjs"; then
+    echo "ucl/$m compiles to an IIFE at safety 0:"; grep -n -B2 -A2 '(() =>' "$OUT/squint0/js/ucl/$m.mjs"; exit 1
+  fi
+done
+echo "no IIFE in the kernels or ucl/lifted at safety 0"
 fi
 
 # ClojureDart builds a project: cljd-project/ is its template, the sources are
@@ -125,14 +128,16 @@ cljd_project "$OUT/cljd" shared backends/cljd testkit/cljd test
 cljd_build "$OUT/cljd" "" test $NSES
 
 hr "CLOJUREDART AT SAFETY 0 (submission builds)"
-cljd_build "$OUT/cljd" "-J-Ducl.safety=0" compile ucl.kernels > "$OUT/cljd/kernels.log" 2>&1 \
+cljd_build "$OUT/cljd" "-J-Ducl.safety=0" compile ucl.kernels ucl.lifted > "$OUT/cljd/kernels.log" 2>&1 \
   || { cat "$OUT/cljd/kernels.log"; exit 1; }
-# D38: a submission is standalone Dart. The kernels are LeetCode-shaped; their
-# safety-0 build must not call the ClojureDart runtime.
-if grep -q 'lcoc_core\.' "$OUT/cljd/lib/cljd-out/ucl/kernels.dart"; then
-  echo "ucl/kernels calls cljd.core at safety 0:"; grep -n 'lcoc_core\.' "$OUT/cljd/lib/cljd-out/ucl/kernels.dart"; exit 1
-fi
-echo "no ClojureDart runtime in the kernels at safety 0"
+# D38: a submission is standalone Dart. The kernels and ucl/lifted are
+# LeetCode-shaped; their safety-0 build must not call the ClojureDart runtime.
+for m in kernels lifted; do
+  if grep -q 'lcoc_core\.' "$OUT/cljd/lib/cljd-out/ucl/$m.dart"; then
+    echo "ucl/$m calls cljd.core at safety 0:"; grep -n 'lcoc_core\.' "$OUT/cljd/lib/cljd-out/ucl/$m.dart"; exit 1
+  fi
+done
+echo "no ClojureDart runtime in the kernels or ucl/lifted at safety 0"
 fi
 
 hr "ALL HOSTS PASSED"

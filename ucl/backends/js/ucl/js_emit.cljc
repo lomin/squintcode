@@ -85,6 +85,8 @@
                                ((:key-literal flavor) src)
                                ((:key-runtime flavor) k)))]
     {:safety s
+     ;; a let, loop, do or case in expression position is an IIFE (D64)
+     :lift :all
      :elt {:read-once? true
            :read (fn [[a i] [sa]]
                    (cond checked?     (list (api 'elt-checked) a i)

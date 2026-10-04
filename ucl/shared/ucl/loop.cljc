@@ -721,6 +721,28 @@
                             (reverse var-groups))]
         (list (u "block") bname wrapped)))))
 
+(defn ^:macro-support names-any?
+  "Does `form` contain a symbol named one of `nms`?"
+  [form nms]
+  (cond (symbol? form) (contains? nms (name form))
+        (map? form)    (boolean (some #(names-any? % nms) (concat (keys form) (vals form))))
+        (coll? form)   (boolean (some #(names-any? % nms) form))
+        :else false))
+
+(defn ^:macro-support result-type
+  "The type of the loop's value when it is surely its default accumulator's,
+   declared or a count; else nil (I39). The lifting pass types the variable
+   it lifts the loop into with it (D64)."
+  [form]
+  (let [{:keys [simple main] fin :finally} (parse-loop form)
+        anon  (filter #(nil? (:into %)) (accumulations main))
+        typed (set (map #(contract/canonical-type (:type %)) (remove #(= :count (:kind %)) anon)))]
+    (when (and (not simple) (seq anon) (empty? fin)
+               (not (names-any? (rest form) #{"return" "return-from" "thereis" "always" "never"})))
+      (cond (empty? typed)                                                  :fixnum
+            (and (= 1 (count typed)) (contract/integer-type? (first typed))) (first typed)
+            :else                                                           nil))))
+
 (defn ^:macro-support expanders
   "ucl/loop's registry entry (I23), for defapi's :vocabularies."
   []
@@ -730,4 +752,5 @@
                                      form))}
    "loop" {:applies? (fn [form] (not (vector? (second form))))
            :expand   expand-loop
+           :result-type result-type
            :block    (fn [form] [(when (kw? (second form) #{"named"}) (nth form 2 nil))])}})
