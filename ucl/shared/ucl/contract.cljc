@@ -1801,7 +1801,7 @@
                " sum/count/maximize/minimize [into v] [of-type T], when/unless/else,"
                " while/until/repeat, always/never/thereis, with, initially, finally, named;"
                " (loop-finish) ends it. No list clauses.\n\n"
-               "With a binding vector it is Clojure's loop.")
+               "Clojure's loop/recur, with a binding vector, is the unqualified `loop`.")
      :arglists '([& clauses])}
     "loop-finish"
     {:doc (str "(loop-finish)\n\nEnds the enclosing ucl/loop normally: its finally clauses run"
