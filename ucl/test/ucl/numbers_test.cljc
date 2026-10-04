@@ -34,3 +34,30 @@
     (is (= "15" (ucl/princ-to-string 15)))
     (is (= "-7" (ucl/princ-to-string (- 3 10))))
     (is (= "Fizz" (ucl/princ-to-string "Fizz")))))
+
+(ucl/defun digit-count (x)
+  (declare (type fixnum x))
+  (ucl/let ((d 1))
+    (declare (type fixnum d))
+    (ucl/loop while (>= x 10)
+              do (ucl/setf x (ucl/truncate x 10))
+                 (ucl/incf d))
+    d))
+
+(deftest truncate-conformance-test
+  (testing "toward zero; the remainder, CL's second value, is dropped"
+    (is (= 3 (ucl/truncate 7 2)))
+    (is (= -3 (ucl/truncate -7 2)))
+    (is (= -3 (ucl/truncate 7 -2)))
+    (is (= 7 (ucl/truncate 7))))
+  (testing "a while loop of truncates"
+    (is (= 4 (ucl/let ((x 1234) (d 1))
+               (declare (type fixnum x d))
+               (ucl/loop while (>= x 10)
+                         do (ucl/setf x (ucl/truncate x 10))
+                            (ucl/incf d))
+               d)))))
+
+(deftest truncate-test
+  (is (= 1 (digit-count 7)))
+  (is (= 5 (digit-count 12345))))

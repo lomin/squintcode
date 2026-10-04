@@ -360,6 +360,17 @@
   [backend x]
   ((op backend :string :princ) x))
 
+(defn ^:macro-support expand-truncate
+  "(truncate number [divisor]): the quotient rounded toward zero (CLHS
+   12.2, the floor entry). Its second value, the remainder, is not returned: ucl has no
+   multiple values (I55). It is `quot` on every host -- Squint's exact
+   (n - n % d) / d, Dart's `~/` when typed -- so it costs what `quot` does."
+  [args]
+  (when-not (<= 1 (count args) 2)
+    (fail! (str "truncate takes a number and an optional divisor: " (pr-str (cons 'truncate args)))
+           {:args args}))
+  (list 'quot (first args) (if (next args) (second args) 1)))
+
 ;; ===========================================================================
 ;; Lambda lists and declarations (D13, D15, D18)
 ;; ===========================================================================
@@ -1843,7 +1854,7 @@
     gethash make-hash-table slot-value
     setf incf decf let let* dotimes block return-from return
     defun defstruct defmethod with-slots
-    princ-to-string])
+    princ-to-string truncate])
 
 (defmacro defapi
   "Generate every contract macro in the calling namespace.
@@ -1944,6 +1955,12 @@
         "(return [value]) -- leave the enclosing block nil (ucl/dotimes, ucl/loop)."
         [& ~'value]
         (~'contract/expand-stray-exit (list* '~'return ~'value)))
+      (defmacro ~'truncate
+        "(truncate number [divisor]) -- the quotient rounded toward zero; the
+         remainder, Common Lisp's second value, is not returned."
+        {:arglists '~'([number] [number divisor])}
+        [& ~'args]
+        (~'contract/expand-truncate ~'args))
       (defmacro ~'princ-to-string
         "(princ-to-string object) -- an integer's decimal digits, or a string itself."
         [~'object]

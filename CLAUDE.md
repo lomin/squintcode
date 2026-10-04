@@ -122,7 +122,8 @@ Rules:
   `map`, `map-into`, `concatenate`, `merge` (a quoted result type: `'vector`,
   `'(vector fixnum)`), `(setf (subseq v s e) new)` (keywords as in CLHS; a literal
   `fn` argument is inlined; called short of its sequence, a function of it),
-  `defmethod`, `with-slots`, `princ-to-string`, `most-positive-fixnum`,
+  `defmethod`, `with-slots`, `princ-to-string`, `(truncate n [d])` (`quot`;
+  no second value), `most-positive-fixnum`,
   `double-float-positive-infinity`.
   Types: `fixnum` (32-bit everywhere), `(signed-byte 53)`, `fixnum-vector`,
   `sb53-vector`, `simple-vector`. Declare a variable's type: on the JVM an

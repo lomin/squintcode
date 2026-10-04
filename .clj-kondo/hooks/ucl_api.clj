@@ -276,6 +276,11 @@
            "(substitute-if-not newitem predicate sequence &key from-end start end count key)\n\nA fresh vector with newitem in place of each element that satisfies the test (at most :count).\n\nCommon Lisp's substitute-if-not on vectors (CLHS 17), expanded inline. A literal fn argument is written into the loop. Called without its sequence, it is a function of the sequence."
            {:arglists '([newitem predicate sequence & {:keys [from-end start end count key]}])}
            ([& args]))
+         (defmacro truncate
+           "(truncate number [divisor]) -- the quotient rounded toward zero; the\n         remainder, Common Lisp's second value, is not returned."
+           {:arglists '([number] [number divisor])}
+           ([number])
+           ([number divisor]))
          (defmacro vector-push-extend
            "(vector-push-extend new-element vector) -- returns the new element's index."
            {:arglists '([new-element vector])}
