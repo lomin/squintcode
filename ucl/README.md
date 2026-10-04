@@ -1544,6 +1544,7 @@ was decided on reasoning, with the trade-offs on the table.
 | D61 | A rejection names the clause or form, the reason, and what to write instead | agent |
 | D62 | Every solution with a loop is ported to `ucl/loop` beside its original (`<problem>_loop.cljc`, same LeetCode names, shared test cases); a port passes I12/I19 and may not be slower | user judgement |
 | D63 | D62's ports are accepted as measured (§9.14): on Dart equal or faster; on V8 121 +13%, the cost of the clause order its source asks for, and 2762 +4–9%, near the run-to-run spread | user judgement, evidence (§9.14) |
+| D64 | Loop-shaped forms in expression position are lifted automatically: every `ucl/defun`/`ucl/defmethod` body, block and registered expansion goes through one pass that moves such a form to the nearest statement boundary, computing it into an internal variable by return-position assignment (D35); siblings evaluated before it are bound to temporaries first, on every host. What is lifted is per host (`:lift`): `:all` on Squint and ClojureScript, `:loops` on the JVM, nothing on ClojureDart, which compiles them as statements itself | decided by the two sessions (this and the sequence-function session) in the user's absence, on D51's deferred item, heuristics 1 and 2 (§9.11) |
 
 ### Implementation decisions (I1–I21)
 
@@ -1589,6 +1590,7 @@ Made while building v1, not in the grilling session; each is reversible.
 | I36 | ClojureScript keys a `js/Map` by a keyword's name behind ClojureScript's keyword marker `\uFDD0` (was the bare name), and `hash-unkey` decodes it when iterating | iteration must give `:a` back as on the other hosts; a plain string key is unchanged |
 | I37 | `(loop-finish)` is an exit (D55): ucl/loop rewrites each of its own -- not a nested loop's -- to `(return-from loop-finish <epilogue>)` from a block of that name around the Clojure loop, so the epilogue runs where every name it reads is bound; outside a loop it is a compile-time error | the block compiler (I25) already makes it static; SBCL and ECL agree on the values |
 | I38 | `for` clauses joined by `and` are a group, ordered as SBCL and ECL do (H67): stepped -- iterators' indexes and tests, then every variable in parallel through temporaries, then the limits -- and started -- counters, iterators, `=` first values, limits. A single clause keeps its code. A name bound twice across `with` and `for` is rejected (H68, D60) | the order shows only in `finally` and in a `=` clause's first value; conformance cases pin both |
+| I39 | The lifting pass (D64), `lift-body` in the contract. It never expands: a lifted form becomes `(ucl.api/setf (%var g T) form)`, a statement the setf macro expands later where the environment is right (I23, I48), and the expression reads `g`. A registry entry may give `:result-type` (`:fixnum`, `:sb53` or nil) for `T`; `ucl/loop` gives its default accumulator's when it is a count or declared integer and nothing else can be its value. A left sibling is bound to a temporary when a later sibling assigns (`setf`/`incf`/`decf`, closures included) or, unless it is a symbol, when a later sibling was lifted; literals and quoted forms never are. A `loop` whose inits lift becomes a `let` of them around it; `if`, `cond`, `and`, `or` lift only their first test in place and otherwise lift whole. `try`, `letfn`, quoted forms and Clojure's binding macros (`when-let`, `doseq`, ...) are left alone; a form with nothing to lift comes back identical | ClojureDart reordered a ucl variable's read after a hoisted form that assigned it (the `read-before` case): a live bug, fixed by the temporaries on every host; output is unchanged where nothing is lifted (I12) |
 | I40 | D45 per operation (§9.13): JS `fill` is `.fill` (either container); JS `replace` and Dart `replace` copy natively when both vectors are typed (`set`/`setRange`, checked at run time), else loop; `subseq`/`copy-seq` are `.slice`/`.sublist`; `sort`/`stable-sort` expand to one shared bottom-up merge sort with the predicate inlined, except JS with `<` (or `#'<`) on a `fixnum-vector`/`sb53-vector` that is a typed array at run time, which calls the native sort; Dart `fill` and everything on the JVM expand to loops | the measurement: native wins only where it copies memory or sorts typed numbers without a comparator; a run-time `ArrayBuffer.isView` check because a declared `fixnum-vector` may be a plain `Array` (H70) |
 | I41 | A sequence function's registry entry applies only to a call through a namespace other than Clojure's own, with every argument: entries are keyed by bare name, and `(count v)` or `(reduce + xs)` in a `ucl/let` body is Clojure's. A curried form is a function value, bound, not tailed | the walker and D35 must not expand Clojure's namesakes; clients always use the alias (D25) |
 | I42 | A literal `fn`'s body is written into the loop with its continuation -- the `if` of a test, the `recur` of a fold -- pushed into the tail of its `let`s and `do`s, unless a name the body binds occurs in the continuation's code; then the body stays an expression | written as it is, an `if` test or a `recur` argument ending in `let` is an expression-position `let`: an IIFE per element on Squint (H22) |
@@ -1764,12 +1766,13 @@ backend selection by source root; mutable host collections only.
   `:test-not` O(n²). On the JVM, a test host, the copy a function works in
   (`sort`'s scratch vector, `remove`'s result) is an untyped local: its stores
   take the dynamic path, with the warning.
-- **Compiler passes** (D51). A sequence function or a `ucl/loop` in
-  expression position is an IIFE on Squint (§9.11). A pass over a `ucl/defun`
-  body could compute it into a temporary before its statement -- lifting with
-  it whatever that statement evaluates first, and stopping at a branch or an
-  unexpanded user macro. Deferred: kept simple until a solution shows an IIFE
-  on a hot path, then designed once for both vocabularies.
+- **Lifting** (D64, I39). Lifted forms inside `try`, `letfn` or Clojure's
+  binding macros (`when-let`, `doseq`) stay IIFEs, as does one outside a
+  `ucl/defun`, `ucl/defmethod` or registered form. On the JVM a `let` around
+  a lifted loop is lifted whole into an untyped cell. On ClojureDart, which
+  hoists such forms itself, only a later assignment triggers a temporary: a
+  left sibling reading a vector a later sibling mutates is left to
+  ClojureDart's own order.
 - **`ucl/loop` and blocks** (D53–D62):
   - The ports (§9.14) are equal or faster on Dart; on V8 121 is +13% for its
     clause order, and 2762 +4–9%, near the run-to-run spread -- accepted
