@@ -1736,8 +1736,9 @@ backend selection by source root; mutable host collections only.
   - Return-position assignment covers `if if-not when when-not cond case do let
     let* loop ucl/dotimes with-slots`; any other init (`try`, `and`, a user
     macro) is bound as a value -- an IIFE on Squint where that host needs one.
-  - A `ucl/let` in expression position is still a `let` there: an IIFE on
-    Squint. Bind it as an init of an enclosing `ucl/let` instead.
+  - A `ucl/let` in expression position outside a `ucl/defun`,
+    `ucl/defmethod` or registered form is still a `let` there: an IIFE on
+    Squint. Inside one it is lifted (D64).
   - `ucl/defun`/`ucl/defmethod` accept required parameters only, so "assignable
     `&optional`/`&aux` parameters" (D36) has nothing to apply to yet.
   - LeetCode 19's `bypass` contains one IIFE (a `some->` in a `setf` value), off
